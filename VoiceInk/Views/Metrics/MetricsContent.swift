@@ -2,7 +2,6 @@ import SwiftUI
 
 struct MetricsContent: View {
     let transcriptions: [Transcription]
-    let licenseState: LicenseViewModel.LicenseState
     @State private var showKeyboardShortcuts = false
 
     var body: some View {
@@ -15,10 +14,7 @@ struct MetricsContent: View {
                         VStack(spacing: 24) {
                             heroSection
                             metricsSection
-                            HStack(alignment: .top, spacing: 18) {
-                                HelpAndResourcesSection()
-                                DashboardPromotionsSection(licenseState: licenseState)
-                            }
+                            HelpAndResourcesSection()
 
                             Spacer(minLength: 20)
 

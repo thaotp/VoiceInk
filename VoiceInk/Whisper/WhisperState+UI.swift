@@ -114,7 +114,6 @@ extension WhisperState {
     func setupNotifications() {
         NotificationCenter.default.addObserver(self, selector: #selector(handleToggleMiniRecorder), name: .toggleMiniRecorder, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(handleDismissMiniRecorder), name: .dismissMiniRecorder, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(handleLicenseStatusChanged), name: .licenseStatusChanged, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(handlePromptChange), name: .promptDidChange, object: nil)
     }
     
@@ -128,10 +127,6 @@ extension WhisperState {
         Task {
             await dismissMiniRecorder()
         }
-    }
-    
-    @objc func handleLicenseStatusChanged() {
-        self.licenseViewModel = LicenseViewModel()
     }
     
     @objc func handlePromptChange() {
