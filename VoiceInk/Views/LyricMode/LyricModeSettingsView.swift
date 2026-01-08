@@ -325,6 +325,24 @@ struct LyricModeSettingsView: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
+                
+                Divider()
+                
+                // Whisper Prompt
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("Prompt", systemImage: "text.quote")
+                            .foregroundColor(.primary)
+                        Spacer()
+                    }
+                    
+                    TextField("e.g., Technical terms, names...", text: $settings.whisperPrompt)
+                        .textFieldStyle(.roundedBorder)
+                    
+                    Text("Guide transcription with context, vocabulary, or style hints")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
             }
             .padding()
             .background(Color(NSColor.controlBackgroundColor))
@@ -451,6 +469,11 @@ struct LyricModeSettingsView: View {
                     await context.setTemperatureOverride(Float(settings.temperature))
                     if settings.beamSize > 1 {
                         await context.setBeamSizeOverride(Int32(settings.beamSize))
+                    }
+                    
+                    // Set whisper prompt if provided
+                    if !settings.whisperPrompt.isEmpty {
+                        await context.setPrompt(settings.whisperPrompt)
                     }
                     
                     try await lyricModeManager.show(with: context)

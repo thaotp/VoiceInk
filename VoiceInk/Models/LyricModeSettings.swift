@@ -15,6 +15,7 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.beamSize") var beamSize: Int = 1
     @AppStorage("lyricMode.silenceDuration") var silenceDuration: Double = 0.5
     @AppStorage("lyricMode.selectedAudioDeviceUID") var selectedAudioDeviceUID: String = ""
+    @AppStorage("lyricMode.whisperPrompt") var whisperPrompt: String = ""
     
     static let shared = LyricModeSettings()
     
