@@ -46,7 +46,8 @@ final class LyricModeWindowManager: ObservableObject {
         }
         
         // Configure VAD with settings
-        vadService.configuration.minSilenceDuration = settings.silenceDuration
+        vadService.configuration.minSilenceDuration = settings.softTimeout
+        vadService.configuration.maxSilenceDuration = settings.hardTimeout
         
         // Create transcription engine
         let engine = RealtimeTranscriptionEngine(

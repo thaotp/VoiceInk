@@ -13,7 +13,8 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.selectedLanguage") var selectedLanguage: String = "auto"
     @AppStorage("lyricMode.temperature") var temperature: Double = 0.0
     @AppStorage("lyricMode.beamSize") var beamSize: Int = 1
-    @AppStorage("lyricMode.silenceDuration") var silenceDuration: Double = 0.5
+    @AppStorage("lyricMode.softTimeout") var softTimeout: Double = 0.5
+    @AppStorage("lyricMode.hardTimeout") var hardTimeout: Double = 2.0
     @AppStorage("lyricMode.selectedAudioDeviceUID") var selectedAudioDeviceUID: String = ""
     @AppStorage("lyricMode.whisperPrompt") var whisperPrompt: String = ""
     

@@ -307,21 +307,42 @@ struct LyricModeSettingsView: View {
                 
                 Divider()
                 
-                // Pause Duration
+                // Soft Timeout (Pause Duration)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Label("Pause Duration", systemImage: "pause.circle")
+                        Label("Soft Timeout", systemImage: "pause.circle")
                             .foregroundColor(.primary)
                         Spacer()
-                        Text(String(format: "%.1fs", settings.silenceDuration))
+                        Text(String(format: "%.1fs", settings.softTimeout))
                             .foregroundColor(.secondary)
                             .monospacedDigit()
                             .frame(width: 50, alignment: .trailing)
                     }
                     
-                    Slider(value: $settings.silenceDuration, in: 0.3...3.0, step: 0.1)
+                    Slider(value: $settings.softTimeout, in: 0.3...3.0, step: 0.1)
                     
-                    Text("Time before breaking into a new line")
+                    Text("Time to wait when silence is detected")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                Divider()
+                
+                // Hard Timeout
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("Hard Timeout", systemImage: "exclamationmark.circle")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Text(String(format: "%.1fs", settings.hardTimeout))
+                            .foregroundColor(.secondary)
+                            .monospacedDigit()
+                            .frame(width: 50, alignment: .trailing)
+                    }
+                    
+                    Slider(value: $settings.hardTimeout, in: 1.0...10.0, step: 0.5)
+                    
+                    Text("Force break even with background noise")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }

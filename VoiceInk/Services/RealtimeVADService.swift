@@ -33,11 +33,13 @@ final class RealtimeVADService: ObservableObject {
         /// Threshold above noise floor to detect speech (in dB)
         var speechThresholdOffset: Float = 10.0
         /// Threshold below speech to detect silence (in dB)
-        var silenceThresholdOffset: Float = 5.0
+        var silenceThresholdOffset: Float = 3.0
         /// Minimum duration of speech to confirm (in seconds)
         var minSpeechDuration: TimeInterval = 0.25
         /// Minimum duration of silence to confirm end of speech (in seconds)
         var minSilenceDuration: TimeInterval = 0.4
+        /// Maximum duration before forcing sentence break (hard timeout)
+        var maxSilenceDuration: TimeInterval = 2.0
         /// Alpha for exponential moving average of noise floor
         var noiseFloorAlpha: Float = 0.01
         /// Maximum noise floor (prevents runaway adaptation)
@@ -54,6 +56,7 @@ final class RealtimeVADService: ObservableObject {
     
     private var speechStartTime: Date?
     private var silenceStartTime: Date?
+    private var lastSpeechTime: Date?
     private var cancellables = Set<AnyCancellable>()
     
     private var speechThreshold: Float {
@@ -109,8 +112,15 @@ final class RealtimeVADService: ObservableObject {
                     transitionTo(.speechEnd)
                 }
             } else {
-                // Still speaking, reset silence timer
+                // Still speaking, reset silence timer and update last speech time
                 silenceStartTime = nil
+                lastSpeechTime = chunk.timestamp
+            }
+            
+            // Hard timeout: if no loud speech for maxSilenceDuration, force end
+            if let lastSpeech = lastSpeechTime,
+               chunk.timestamp.timeIntervalSince(lastSpeech) >= configuration.maxSilenceDuration {
+                transitionTo(.speechEnd)
             }
             
         case .speechEnd:
@@ -127,6 +137,7 @@ final class RealtimeVADService: ObservableObject {
         isSpeaking = false
         speechStartTime = nil
         silenceStartTime = nil
+        lastSpeechTime = nil
         currentPower = -60.0
     }
     
