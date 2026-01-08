@@ -6,6 +6,7 @@ import KeyboardShortcuts
 enum ViewType: String, CaseIterable, Identifiable {
     case metrics = "Dashboard"
     case transcribeAudio = "Transcribe Audio"
+    case lyricMode = "Lyric Mode"
     case history = "History"
     case models = "AI Models"
     case enhancement = "Enhancement"
@@ -22,6 +23,7 @@ enum ViewType: String, CaseIterable, Identifiable {
         switch self {
         case .metrics: return "gauge.medium"
         case .transcribeAudio: return "waveform.circle.fill"
+        case .lyricMode: return "text.bubble.fill"
         case .history: return "doc.text.fill"
         case .models: return "brain.head.profile"
         case .enhancement: return "wand.and.stars"
@@ -62,6 +64,7 @@ struct ContentView: View {
     @State private var selectedView: ViewType? = .metrics
     let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     @StateObject private var licenseViewModel = LicenseViewModel()
+    @StateObject private var lyricModeManager = LyricModeWindowManager()
 
     private var visibleViewTypes: [ViewType] {
         ViewType.allCases.filter { viewType in
@@ -184,6 +187,12 @@ struct ContentView: View {
             EnhancementSettingsView()
         case .transcribeAudio:
             AudioTranscribeView()
+        case .lyricMode:
+            LyricModeSettingsView(
+                settings: LyricModeSettings.shared,
+                lyricModeManager: lyricModeManager,
+                whisperState: whisperState
+            )
         case .history:
             Text("History")
                 .foregroundColor(.secondary)

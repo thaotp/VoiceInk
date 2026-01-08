@@ -32,4 +32,15 @@ extension WhisperState {
             }
         }
     }
+    
+    /// Get the file path for a local whisper model
+    func getModelPath(for model: any TranscriptionModel) -> String? {
+        guard model.provider == .local else { return nil }
+        
+        // Find the WhisperModel in availableModels
+        if let whisperModel = availableModels.first(where: { $0.name == model.name }) {
+            return whisperModel.url.path
+        }
+        return nil
+    }
 } 
