@@ -6,6 +6,7 @@ struct LyricModeSettingsView: View {
     @ObservedObject var settings: LyricModeSettings
     @ObservedObject var lyricModeManager: LyricModeWindowManager
     @ObservedObject var whisperState: WhisperState
+    @ObservedObject var audioDeviceManager = AudioDeviceManager.shared
     
     @State private var isStarting = false
     
@@ -19,6 +20,11 @@ struct LyricModeSettingsView: View {
                 
                 // Control Section
                 controlSection
+                
+                Divider()
+                
+                // Transcription Settings (Lyrics-specific)
+                transcriptionSettingsSection
                 
                 Divider()
                 
@@ -93,7 +99,7 @@ struct LyricModeSettingsView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(lyricModeManager.isVisible ? .red : .blue)
-                .disabled(isStarting || whisperState.currentTranscriptionModel == nil)
+                .disabled(isStarting || selectedModel == nil)
                 
                 // Clear Button
                 if lyricModeManager.isVisible {
@@ -118,15 +124,211 @@ struct LyricModeSettingsView: View {
                     .foregroundColor(.secondary)
             }
             
-            if whisperState.currentTranscriptionModel == nil {
+            if whisperState.availableModels.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange)
-                    Text("Please select an AI model first")
+                    Text("No local models available. Please download a model first.")
                         .font(.caption)
                         .foregroundColor(.orange)
                 }
             }
+        }
+    }
+    
+    // MARK: - Transcription Settings Section
+    
+    /// The currently selected model for Lyrics mode
+    private var selectedModel: WhisperModel? {
+        if settings.selectedModelName.isEmpty {
+            return whisperState.availableModels.first
+        }
+        return whisperState.availableModels.first { $0.name == settings.selectedModelName }
+    }
+    
+    /// Available languages for the selected model (Whisper supports these)
+    private var availableLanguages: [(code: String, name: String)] {
+        [
+            ("auto", "Auto Detect"),
+            ("en", "English"),
+            ("zh", "Chinese"),
+            ("de", "German"),
+            ("es", "Spanish"),
+            ("ru", "Russian"),
+            ("ko", "Korean"),
+            ("fr", "French"),
+            ("ja", "Japanese"),
+            ("pt", "Portuguese"),
+            ("tr", "Turkish"),
+            ("pl", "Polish"),
+            ("ca", "Catalan"),
+            ("nl", "Dutch"),
+            ("ar", "Arabic"),
+            ("sv", "Swedish"),
+            ("it", "Italian"),
+            ("id", "Indonesian"),
+            ("hi", "Hindi"),
+            ("fi", "Finnish"),
+            ("vi", "Vietnamese"),
+            ("he", "Hebrew"),
+            ("uk", "Ukrainian"),
+            ("el", "Greek"),
+            ("ms", "Malay"),
+            ("cs", "Czech"),
+            ("ro", "Romanian"),
+            ("da", "Danish"),
+            ("hu", "Hungarian"),
+            ("ta", "Tamil"),
+            ("no", "Norwegian"),
+            ("th", "Thai")
+        ]
+    }
+    
+    private var transcriptionSettingsSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Transcription Settings")
+                .font(.headline)
+            
+            // Model & Audio Input Group
+            VStack(spacing: 12) {
+                // Whisper Model Row
+                HStack {
+                    Label("Model", systemImage: "cpu")
+                        .foregroundColor(.primary)
+                        .frame(width: 120, alignment: .leading)
+                    
+                    Spacer()
+                    
+                    if whisperState.availableModels.isEmpty {
+                        Text("No models")
+                            .foregroundColor(.secondary)
+                    } else {
+                        Picker("Model", selection: $settings.selectedModelName) {
+                            ForEach(whisperState.availableModels, id: \.name) { model in
+                                Text(model.name).tag(model.name)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(maxWidth: 200)
+                        .onAppear {
+                            if settings.selectedModelName.isEmpty, let first = whisperState.availableModels.first {
+                                settings.selectedModelName = first.name
+                            }
+                        }
+                    }
+                }
+                
+                // Audio Input Row
+                HStack {
+                    Label("Audio Input", systemImage: "mic")
+                        .foregroundColor(.primary)
+                        .frame(width: 120, alignment: .leading)
+                    
+                    Spacer()
+                    
+                    Picker("Audio Input", selection: $settings.selectedAudioDeviceUID) {
+                        Text("System Default").tag("")
+                        ForEach(audioDeviceManager.availableDevices, id: \.uid) { device in
+                            Text(device.name).tag(device.uid)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .frame(maxWidth: 200)
+                }
+                
+                // Language Row
+                HStack {
+                    Label("Language", systemImage: "globe")
+                        .foregroundColor(.primary)
+                        .frame(width: 120, alignment: .leading)
+                    
+                    Spacer()
+                    
+                    Picker("Language", selection: $settings.selectedLanguage) {
+                        ForEach(availableLanguages, id: \.code) { language in
+                            Text(language.name).tag(language.code)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .frame(maxWidth: 200)
+                }
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
+            
+            // Advanced Settings Group
+            VStack(spacing: 16) {
+                // Temperature
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("Temperature", systemImage: "thermometer.medium")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Text(String(format: "%.2f", settings.temperature))
+                            .foregroundColor(.secondary)
+                            .monospacedDigit()
+                            .frame(width: 50, alignment: .trailing)
+                    }
+                    
+                    Slider(value: $settings.temperature, in: 0.0...1.0, step: 0.05)
+                    
+                    Text("Lower = deterministic, Higher = varied")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                Divider()
+                
+                // Beam Size
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("Beam Size", systemImage: "arrow.triangle.branch")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Text("\(settings.beamSize)")
+                            .foregroundColor(.secondary)
+                            .monospacedDigit()
+                            .frame(width: 50, alignment: .trailing)
+                    }
+                    
+                    Picker("", selection: $settings.beamSize) {
+                        Text("1 (Fast)").tag(1)
+                        Text("2").tag(2)
+                        Text("3").tag(3)
+                        Text("5 (Quality)").tag(5)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+                
+                Divider()
+                
+                // Pause Duration
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("Pause Duration", systemImage: "pause.circle")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Text(String(format: "%.1fs", settings.silenceDuration))
+                            .foregroundColor(.secondary)
+                            .monospacedDigit()
+                            .frame(width: 50, alignment: .trailing)
+                    }
+                    
+                    Slider(value: $settings.silenceDuration, in: 0.3...3.0, step: 0.1)
+                    
+                    Text("Time before breaking into a new line")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
         }
     }
     
@@ -226,8 +428,7 @@ struct LyricModeSettingsView: View {
     // MARK: - Actions
     
     private func toggleLyricMode() {
-        guard let model = whisperState.currentTranscriptionModel,
-              let context = whisperState.loadedLocalModel else {
+        guard let model = selectedModel else {
             return
         }
         
@@ -236,16 +437,23 @@ struct LyricModeSettingsView: View {
             defer { isStarting = false }
             
             do {
-                // Need to load or get whisper context
-                // For now, we'll create a basic toggle that uses the existing model
                 if lyricModeManager.isVisible {
                     lyricModeManager.hide()
                 } else {
-                    // Create whisper context from current model
-                    if let modelPath = whisperState.getModelPath(for: model) {
-                        let context = try await WhisperContext.createContext(path: modelPath)
-                        try await lyricModeManager.show(with: context)
+                    // Create whisper context from Lyrics-specific model
+                    let context = try await WhisperContext.createContext(path: model.url.path)
+                    
+                    // Set language override for Lyrics mode
+                    let language = settings.selectedLanguage == "auto" ? nil : settings.selectedLanguage
+                    await context.setLanguageOverride(language)
+                    
+                    // Set temperature and beam size overrides
+                    await context.setTemperatureOverride(Float(settings.temperature))
+                    if settings.beamSize > 1 {
+                        await context.setBeamSizeOverride(Int32(settings.beamSize))
                     }
+                    
+                    try await lyricModeManager.show(with: context)
                 }
             } catch {
                 print("Failed to toggle Lyric Mode: \(error.localizedDescription)")

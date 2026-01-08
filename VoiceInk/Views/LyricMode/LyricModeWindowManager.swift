@@ -37,6 +37,17 @@ final class LyricModeWindowManager: ObservableObject {
         
         self.whisperContext = whisperContext
         
+        // Configure audio device if specified
+        if !settings.selectedAudioDeviceUID.isEmpty {
+            let audioDeviceManager = AudioDeviceManager.shared
+            if let device = audioDeviceManager.availableDevices.first(where: { $0.uid == settings.selectedAudioDeviceUID }) {
+                try? AudioDeviceConfiguration.setDefaultInputDevice(device.id)
+            }
+        }
+        
+        // Configure VAD with settings
+        vadService.configuration.minSilenceDuration = settings.silenceDuration
+        
         // Create transcription engine
         let engine = RealtimeTranscriptionEngine(
             audioStream: audioStreamService,

@@ -8,6 +8,14 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.backgroundOpacity") var backgroundOpacity: Double = 0.8
     @AppStorage("lyricMode.showPartialHighlight") var showPartialHighlight: Bool = true
     
+    // Transcription settings (separate from global settings)
+    @AppStorage("lyricMode.selectedModelName") var selectedModelName: String = ""
+    @AppStorage("lyricMode.selectedLanguage") var selectedLanguage: String = "auto"
+    @AppStorage("lyricMode.temperature") var temperature: Double = 0.0
+    @AppStorage("lyricMode.beamSize") var beamSize: Int = 1
+    @AppStorage("lyricMode.silenceDuration") var silenceDuration: Double = 0.5
+    @AppStorage("lyricMode.selectedAudioDeviceUID") var selectedAudioDeviceUID: String = ""
+    
     static let shared = LyricModeSettings()
     
     private init() {}

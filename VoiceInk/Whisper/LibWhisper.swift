@@ -14,6 +14,9 @@ actor WhisperContext {
     private var prompt: String?
     private var promptCString: [CChar]?
     private var vadModelPath: String?
+    private var languageOverride: String?
+    private var temperatureOverride: Float?
+    private var beamSizeOverride: Int32?
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "WhisperContext")
 
     private init() {}
@@ -32,10 +35,14 @@ actor WhisperContext {
         guard let context = context else { return false }
         
         let maxThreads = max(1, min(8, cpuCount() - 2))
-        var params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
+        // Use beam search if beam size override is set and > 1
+        let useBeamSearch = (beamSizeOverride ?? 1) > 1
+        var params = useBeamSearch 
+            ? whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH)
+            : whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
         
-        // Read language directly from UserDefaults
-        let selectedLanguage = UserDefaults.standard.string(forKey: "SelectedLanguage") ?? "auto"
+        // Use language override if set (for Lyrics mode), otherwise read from UserDefaults
+        let selectedLanguage = languageOverride ?? UserDefaults.standard.string(forKey: "SelectedLanguage") ?? "auto"
         if selectedLanguage != "auto" {
             languageCString = Array(selectedLanguage.utf8CString)
             params.language = languageCString?.withUnsafeBufferPointer { ptr in
@@ -65,7 +72,14 @@ actor WhisperContext {
         params.offset_ms = 0
         params.no_context = true
         params.single_segment = false
-        params.temperature = 0.2
+        
+        // Apply temperature override or default
+        params.temperature = temperatureOverride ?? 0.0
+        
+        // Apply beam size if using beam search
+        if useBeamSearch, let beamSize = beamSizeOverride {
+            params.beam_search.beam_size = beamSize
+        }
 
         whisper_reset_timings(context)
         
@@ -157,6 +171,18 @@ actor WhisperContext {
 
     func setPrompt(_ prompt: String?) {
         self.prompt = prompt
+    }
+    
+    func setLanguageOverride(_ language: String?) {
+        self.languageOverride = language
+    }
+    
+    func setTemperatureOverride(_ temperature: Float?) {
+        self.temperatureOverride = temperature
+    }
+    
+    func setBeamSizeOverride(_ beamSize: Int32?) {
+        self.beamSizeOverride = beamSize
     }
 }
 
