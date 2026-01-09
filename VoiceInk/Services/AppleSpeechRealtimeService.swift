@@ -4,8 +4,8 @@ import Speech
 import Combine
 import os
 
-/// Real-time speech recognition service using Apple's SFSpeechRecognizer
-/// Works on macOS 10.15+ for real-time streaming transcription
+/// Real-time speech recognition service using Apple's SpeechTranscriber (macOS 26+)
+/// Falls back to SFSpeechRecognizer on older macOS versions
 @MainActor
 final class AppleSpeechRealtimeService: ObservableObject {
     
@@ -23,28 +23,32 @@ final class AppleSpeechRealtimeService: ObservableObject {
     
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "AppleSpeechRealtime")
     
+    // SpeechTranscriber (macOS 26+) - using Any to avoid availability issues
+    private var inputContinuation: Any? // AsyncStream<AnalyzerInput>.Continuation on macOS 26+
+    private var recognitionTask: Task<Void, Error>?
+    
+    // SFSpeechRecognizer fallback (older macOS)
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
+    private var legacyRecognitionTask: SFSpeechRecognitionTask?
     private var audioEngine: AVAudioEngine?
-    
-    private var lastFinalizedText: String = ""
     private var restartTimer: Timer?
     
-    // Configuration
+    private var lastFinalizedText: String = ""
     private var selectedLocale: Locale = Locale(identifier: "en-US")
+    
+    // Track which API is being used
+    private var usingSpeechTranscriber = false
     
     // MARK: - Initialization
     
     init() {
-        // Check initial status without triggering request
         let status = SFSpeechRecognizer.authorizationStatus()
         isAuthorized = (status == .authorized)
     }
     
     // MARK: - Authorization
     
-    /// Request speech recognition authorization
     func requestAuthorization() async -> Bool {
         return await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { [weak self] status in
@@ -62,39 +66,22 @@ final class AppleSpeechRealtimeService: ObservableObject {
     
     // MARK: - Public Methods
     
-    /// Set the language for speech recognition
     func setLanguage(_ languageCode: String) {
         let localeMapping: [String: String] = [
-            "auto": "en-US",
-            "en": "en-US",
-            "es": "es-ES",
-            "fr": "fr-FR",
-            "de": "de-DE",
-            "it": "it-IT",
-            "ja": "ja-JP",
-            "ko": "ko-KR",
-            "zh": "zh-CN",
-            "pt": "pt-BR",
-            "ru": "ru-RU",
-            "ar": "ar-SA",
-            "hi": "hi-IN",
-            "nl": "nl-NL",
-            "pl": "pl-PL",
-            "tr": "tr-TR",
-            "vi": "vi-VN",
-            "th": "th-TH"
+            "auto": "en-US", "en": "en-US", "es": "es-ES", "fr": "fr-FR",
+            "de": "de-DE", "it": "it-IT", "ja": "ja-JP", "ko": "ko-KR",
+            "pt": "pt-BR", "zh": "zh-CN", "ru": "ru-RU", "ar": "ar-SA",
+            "hi": "hi-IN", "nl": "nl-NL", "pl": "pl-PL", "tr": "tr-TR",
+            "vi": "vi-VN", "th": "th-TH", "id": "id-ID", "ms": "ms-MY"
         ]
         
-        let localeId = localeMapping[languageCode] ?? "en-US"
-        selectedLocale = Locale(identifier: localeId)
-        speechRecognizer = SFSpeechRecognizer(locale: selectedLocale)
-        
-        logger.info("Apple Speech language set to: \(localeId)")
+        let identifier = localeMapping[languageCode] ?? "en-US"
+        selectedLocale = Locale(identifier: identifier)
+        logger.info("Language set to: \(identifier)")
     }
     
-    /// Start real-time speech recognition
     func startListening() async throws {
-        // Request authorization if not already authorized
+        // Check authorization
         if !isAuthorized {
             let authorized = await requestAuthorization()
             guard authorized else {
@@ -104,24 +91,90 @@ final class AppleSpeechRealtimeService: ObservableObject {
         
         guard !isListening else { return }
         
-        // Initialize recognizer if needed
-        if speechRecognizer == nil {
-            speechRecognizer = SFSpeechRecognizer(locale: selectedLocale)
+        // Check legacy API setting
+        let useLegacy = UserDefaults.standard.bool(forKey: "lyricMode.useAppleSpeechLegacyAPI")
+        
+        // Try SpeechTranscriber on macOS 26+ if not forced to legacy, fall back to SFSpeechRecognizer
+        if #available(macOS 26, *), !useLegacy {
+            // Check if locale is supported by SpeechTranscriber (handling _ vs -)
+            let supportedLocales = await SpeechTranscriber.supportedLocales
+            let isSupported = supportedLocales.contains { 
+                $0.identifier.replacingOccurrences(of: "_", with: "-") == self.selectedLocale.identifier.replacingOccurrences(of: "_", with: "-") 
+            }
+            
+            if isSupported {
+                do {
+                    try await startWithSpeechTranscriber()
+                    return
+                } catch {
+                    logger.error("Failed to start SpeechTranscriber: \(error.localizedDescription), falling back...")
+                    // If SpeechTranscriber fails (e.g. model not allocated), cleanup and try fallback
+                    stopListening()
+                }
+            } else {
+                logger.warning("Locale \(self.selectedLocale.identifier) not supported by SpeechTranscriber, falling back to SFSpeechRecognizer")
+            }
         }
         
-        guard let recognizer = speechRecognizer, recognizer.isAvailable else {
-            throw AppleSpeechError.recognizerUnavailable
+        try await startWithSFSpeechRecognizer()
+    }
+    
+    func stopListening() {
+        if usingSpeechTranscriber {
+            if #available(macOS 26, *) {
+                stopSpeechTranscriber()
+            }
+        } else {
+            stopSFSpeechRecognizer()
         }
         
-        // Create recognition request
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        
-        guard let request = recognitionRequest else {
-            throw AppleSpeechError.requestCreationFailed
+        isListening = false
+        logger.info("Apple Speech recognition stopped")
+    }
+    
+    func processAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+        if usingSpeechTranscriber {
+            if #available(macOS 26, *) {
+                // Send buffer to SpeechTranscriber via async stream
+                let input = AnalyzerInput(buffer: buffer)
+                if let continuation = inputContinuation as? AsyncStream<AnalyzerInput>.Continuation {
+                    continuation.yield(input)
+                }
+            }
+        } else {
+            // Send to SFSpeechRecognizer
+            recognitionRequest?.append(buffer)
         }
+    }
+    
+    func clear() {
+        transcript = ""
+        partialTranscript = ""
+        lastFinalizedText = ""
+    }
+    
+    // MARK: - SpeechTranscriber (macOS 26+)
+    
+    @available(macOS 26, *)
+    private func startWithSpeechTranscriber() async throws {
+        logger.info("Starting SpeechTranscriber (macOS 26+) - no restart required")
+        usingSpeechTranscriber = true
         
-        request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = false // Allow cloud for better accuracy
+        // Create async stream for audio input
+        let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+        self.inputContinuation = continuation
+        
+        // Create transcriber with settings for maximum update frequency
+        // Empty transcriptionOptions and using volatileResults gives us the most frequent partial updates
+        let transcriber = SpeechTranscriber(
+            locale: selectedLocale,
+            transcriptionOptions: [],  // No filtering - get all updates
+            reportingOptions: [.volatileResults],  // Get unstable but immediate partial results
+            attributeOptions: []
+        )
+        
+        // Create analyzer with transcriber
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
         
         // Setup audio engine
         audioEngine = AVAudioEngine()
@@ -132,42 +185,77 @@ final class AppleSpeechRealtimeService: ObservableObject {
         let inputNode = engine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
-        // Install tap on input
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
+        // Get best audio format for the analyzer
+        guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+            logger.error("Could not determine best audio format for SpeechTranscriber")
+            throw AppleSpeechError.audioEngineError
         }
         
-        // Start recognition
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+        // Create converter if formats differ (Native is usually Float32, Analyzer wants Int16)
+        let converter = AVAudioConverter(from: recordingFormat, to: analyzerFormat)
+        
+        // Install tap with small buffer for maximum update frequency (256 = ~5ms at 48kHz)
+        inputNode.installTap(onBus: 0, bufferSize: 256, format: recordingFormat) { [weak self] buffer, _ in
             guard let self = self else { return }
             
-            if let result = result {
-                let text = result.bestTranscription.formattedString
+            var bufferToSend = buffer
+            
+            // Convert if needed
+            if let converter = converter, converter.inputFormat != converter.outputFormat {
+                // Calculate output frame capacity
+                let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
+                let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
                 
-                DispatchQueue.main.async {
-                    if result.isFinal {
-                        // Finalized result
-                        let newText = self.extractNewText(from: text)
-                        if !newText.isEmpty {
-                            self.transcript = text
-                            self.partialTranscript = ""
-                            self.transcriptionPublisher.send(newText)
-                            self.lastFinalizedText = text
-                        }
+                if let outputBuffer = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: capacity) {
+                    var error: NSError?
+                    let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
+                        outStatus.pointee = .haveData
+                        return buffer
+                    }
+                    
+                    converter.convert(to: outputBuffer, error: &error, withInputFrom: inputBlock)
+                    
+                    if error == nil {
+                        bufferToSend = outputBuffer
                     } else {
-                        // Partial result
-                        self.partialTranscript = self.extractNewText(from: text)
+                        // Log conversation error?
+                        // self.logger.error("Conversion error: \(error!)") // strict concurrency capture risk?
                     }
                 }
             }
             
-            // Ignore expected cancellation errors during restart
-            if let error = error as NSError? {
-                // 216 = canceled, 1110 = request canceled - these are expected during restart
-                if error.code == 216 || error.code == 1110 {
-                    return
+            // Send to analyzer
+            let input = AnalyzerInput(buffer: bufferToSend)
+            if let continuation = self.inputContinuation as? AsyncStream<AnalyzerInput>.Continuation {
+                continuation.yield(input)
+            }
+        }
+        
+        // Start recognition task
+        recognitionTask = Task {
+            do {
+                try await analyzer.start(inputSequence: stream)
+                
+                for try await result in transcriber.results {
+                    let text = String(result.text.characters)
+                    
+                    await MainActor.run {
+                        // ALWAYS update partial transcript immediately for live feel
+                        // This ensures we see text appearing as soon as recognizer has ANY hypothesis
+                        if !result.isFinal {
+                            self.partialTranscript = text
+                        } else {
+                            // Only finalize when truly final
+                            if !text.isEmpty {
+                                self.transcript += text
+                                self.partialTranscript = ""
+                                self.transcriptionPublisher.send(text)
+                            }
+                        }
+                    }
                 }
-                self.logger.error("Recognition error: \(error.localizedDescription)")
+            } catch {
+                self.logger.error("SpeechTranscriber error: \(error.localizedDescription)")
             }
         }
         
@@ -176,14 +264,97 @@ final class AppleSpeechRealtimeService: ObservableObject {
         try engine.start()
         
         isListening = true
-        logger.info("Apple Speech recognition started")
-        
-        // Schedule periodic restart to handle the 1-minute limit
-        scheduleAutoRestart()
+        logger.info("SpeechTranscriber started successfully - continuous transcription enabled")
     }
     
-    /// Stop speech recognition
-    func stopListening() {
+    @available(macOS 26, *)
+    private func stopSpeechTranscriber() {
+        if let continuation = inputContinuation as? AsyncStream<AnalyzerInput>.Continuation {
+            continuation.finish()
+        }
+        inputContinuation = nil
+        
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        audioEngine = nil
+    }
+    
+    // MARK: - SFSpeechRecognizer Fallback (older macOS)
+    
+    private func startWithSFSpeechRecognizer() async throws {
+        logger.info("Starting SFSpeechRecognizer fallback (pre-macOS 26)")
+        usingSpeechTranscriber = false
+        
+        if speechRecognizer == nil {
+            speechRecognizer = SFSpeechRecognizer(locale: selectedLocale)
+        }
+        
+        guard let recognizer = speechRecognizer, recognizer.isAvailable else {
+            throw AppleSpeechError.recognizerUnavailable
+        }
+        
+        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+        guard let request = recognitionRequest else {
+            throw AppleSpeechError.requestCreationFailed
+        }
+        
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = false
+        
+        audioEngine = AVAudioEngine()
+        guard let engine = audioEngine else {
+            throw AppleSpeechError.audioEngineError
+        }
+        
+        let inputNode = engine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+            self?.recognitionRequest?.append(buffer)
+        }
+        
+        legacyRecognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            guard let self = self else { return }
+            
+            if let result = result {
+                let text = result.bestTranscription.formattedString
+                
+                DispatchQueue.main.async {
+                    if result.isFinal {
+                        let newText = self.extractNewText(from: text)
+                        if !newText.isEmpty {
+                            self.transcript = text
+                            self.partialTranscript = ""
+                            self.transcriptionPublisher.send(newText)
+                            self.lastFinalizedText = text
+                        }
+                    } else {
+                        self.partialTranscript = self.extractNewText(from: text)
+                    }
+                }
+            }
+            
+            if let error = error as NSError? {
+                let cancelCodes = [1, 216, 301, 1110]
+                if cancelCodes.contains(error.code) { return }
+                self.logger.error("Recognition error: \(error.localizedDescription)")
+            }
+        }
+        
+        engine.prepare()
+        try engine.start()
+        
+        isListening = true
+        
+        // Schedule auto-restart for SFSpeechRecognizer (1-minute limit)
+        scheduleAutoRestart()
+        logger.info("SFSpeechRecognizer started (will restart every 55s)")
+    }
+    
+    private func stopSFSpeechRecognizer() {
         restartTimer?.invalidate()
         restartTimer = nil
         
@@ -191,29 +362,12 @@ final class AppleSpeechRealtimeService: ObservableObject {
         audioEngine?.inputNode.removeTap(onBus: 0)
         
         recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
+        legacyRecognitionTask?.cancel()
         
         recognitionRequest = nil
-        recognitionTask = nil
+        legacyRecognitionTask = nil
         audioEngine = nil
-        
-        isListening = false
-        logger.info("Apple Speech recognition stopped")
     }
-    
-    /// Process audio samples directly (for integration with existing audio stream)
-    func processAudioBuffer(_ buffer: AVAudioPCMBuffer) {
-        recognitionRequest?.append(buffer)
-    }
-    
-    /// Clear transcript state
-    func clearTranscript() {
-        transcript = ""
-        partialTranscript = ""
-        lastFinalizedText = ""
-    }
-    
-    // MARK: - Private Methods
     
     private func extractNewText(from fullText: String) -> String {
         if fullText.hasPrefix(lastFinalizedText) {
@@ -224,11 +378,10 @@ final class AppleSpeechRealtimeService: ObservableObject {
     }
     
     private func scheduleAutoRestart() {
-        // Restart every 55 seconds to avoid the 1-minute limit
         restartTimer = Timer.scheduledTimer(withTimeInterval: 55, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self = self, self.isListening, !self.isRestarting else { return }
-                self.logger.debug("Auto-restarting recognition to avoid timeout")
+                guard let self = self, self.isListening, !self.usingSpeechTranscriber else { return }
+                self.logger.debug("Auto-restarting SFSpeechRecognizer to avoid timeout")
                 await self.performRestart()
             }
         }
@@ -237,23 +390,18 @@ final class AppleSpeechRealtimeService: ObservableObject {
     private var isRestarting = false
     
     private func performRestart() async {
-        guard isListening, !isRestarting else { return }
+        guard isListening, !isRestarting, !usingSpeechTranscriber else { return }
         
         isRestarting = true
         defer { isRestarting = false }
         
-        // End current request gracefully
         recognitionRequest?.endAudio()
+        try? await Task.sleep(nanoseconds: 500_000_000)
         
-        // Give it a moment to finalize
-        try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
-        
-        // Cancel old task
-        recognitionTask?.cancel()
-        recognitionTask = nil
+        legacyRecognitionTask?.cancel()
+        legacyRecognitionTask = nil
         recognitionRequest = nil
         
-        // Create new recognition
         guard let recognizer = speechRecognizer, recognizer.isAvailable else {
             logger.error("Recognizer unavailable during restart")
             return
@@ -264,16 +412,14 @@ final class AppleSpeechRealtimeService: ObservableObject {
         newRequest.requiresOnDeviceRecognition = false
         recognitionRequest = newRequest
         
-        // Reset state for new session
         lastFinalizedText = ""
         
-        recognitionTask = recognizer.recognitionTask(with: newRequest) { [weak self] result, error in
+        legacyRecognitionTask = recognizer.recognitionTask(with: newRequest) { [weak self] result, error in
             guard let self = self else { return }
             
-            // Ignore cancellation errors during restart
-            if let error = error as NSError?, error.code == 216 || error.code == 1110 {
-                // 216 = canceled, 1110 = request canceled
-                return
+            if let error = error as NSError? {
+                let cancelCodes = [1, 209, 216, 301, 1110]
+                if cancelCodes.contains(error.code) { return }
             }
             
             if let result = result {
@@ -292,7 +438,6 @@ final class AppleSpeechRealtimeService: ObservableObject {
                 }
             }
             
-            // Only handle unexpected errors
             if let error = error, self.isListening, !self.isRestarting {
                 self.logger.error("Recognition error: \(error.localizedDescription)")
             }
@@ -304,7 +449,7 @@ final class AppleSpeechRealtimeService: ObservableObject {
 
 // MARK: - Errors
 
-enum AppleSpeechError: Error, LocalizedError {
+enum AppleSpeechError: LocalizedError {
     case notAuthorized
     case recognizerUnavailable
     case requestCreationFailed
@@ -313,13 +458,13 @@ enum AppleSpeechError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notAuthorized:
-            return "Speech recognition is not authorized. Please enable it in System Settings > Privacy & Security > Speech Recognition."
+            return "Speech recognition not authorized"
         case .recognizerUnavailable:
-            return "Speech recognizer is not available for the selected language."
+            return "Speech recognizer is unavailable"
         case .requestCreationFailed:
-            return "Failed to create speech recognition request."
+            return "Failed to create recognition request"
         case .audioEngineError:
-            return "Failed to initialize audio engine."
+            return "Audio engine error"
         }
     }
 }

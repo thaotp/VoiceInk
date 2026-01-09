@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// SwiftUI view for displaying transcribed text from Apple Speech in lyric/karaoke style
+/// SwiftUI view for displaying transcribed text from Apple Speech with sentence breaks
 struct LyricModeAppleSpeechOverlayView: View {
     @ObservedObject var speechService: AppleSpeechRealtimeService
     @ObservedObject var settings: LyricModeSettings
@@ -35,26 +35,32 @@ struct LyricModeAppleSpeechOverlayView: View {
             }
         }
         .onReceive(speechService.transcriptionPublisher) { newText in
-            guard !newText.isEmpty else { return }
-            
-            withAnimation(.easeOut(duration: 0.3)) {
-                // Split by sentence-ending punctuation for better readability
-                let sentences = splitIntoSentences(newText)
-                for sentence in sentences {
-                    let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        confirmedLines.append(trimmed)
-                    }
+            processTranscription(newText)
+        }
+    }
+    
+    // MARK: - Sentence Processing
+    
+    /// Process transcription text and split into sentences for display
+    private func processTranscription(_ text: String) {
+        guard !text.isEmpty else { return }
+        
+        // Split text into sentences using punctuation
+        let sentences = splitIntoSentences(text)
+        
+        withAnimation(.easeOut(duration: 0.3)) {
+            for sentence in sentences {
+                let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    confirmedLines.append(trimmed)
                 }
             }
         }
     }
     
-    // MARK: - Helpers
-    
-    /// Split text into sentences based on punctuation
+    /// Split text into sentences based on punctuation marks
     private func splitIntoSentences(_ text: String) -> [String] {
-        // Use regex to split by sentence-ending punctuation while keeping the punctuation
+        // Match sentence-ending punctuation: .!?。？！
         let pattern = "(?<=[.!?。？！])\\s*"
         if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
             let range = NSRange(text.startIndex..., in: text)
@@ -150,7 +156,7 @@ struct LyricModeAppleSpeechOverlayView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 6) {
-                    // Show confirmed lines (limited to last N lines)
+                    // Show confirmed lines (limited to visible count)
                     ForEach(Array(visibleLines.enumerated()), id: \.offset) { index, line in
                         Text(line)
                             .font(.system(size: settings.fontSize, weight: index == visibleLines.count - 1 ? .semibold : .regular))
@@ -162,7 +168,7 @@ struct LyricModeAppleSpeechOverlayView: View {
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                     
-                    // Current partial text with typing indicator
+                    // Current partial text with typing indicator (live updates)
                     if !speechService.partialTranscript.isEmpty {
                         HStack(alignment: .top, spacing: 4) {
                             Text(speechService.partialTranscript)
@@ -171,6 +177,7 @@ struct LyricModeAppleSpeechOverlayView: View {
                                 .lineLimit(nil)
                                 .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
+                                .animation(.easeOut(duration: 0.1), value: speechService.partialTranscript)  // Smooth text updates
                             
                             if speechService.isListening {
                                 TypingIndicator()
@@ -178,6 +185,7 @@ struct LyricModeAppleSpeechOverlayView: View {
                             }
                         }
                         .id("partial")
+                        .transition(.opacity)  // Fade in/out smoothly
                     } else if speechService.isListening && confirmedLines.isEmpty {
                         // Show typing indicator when listening but no text yet
                         HStack(spacing: 4) {

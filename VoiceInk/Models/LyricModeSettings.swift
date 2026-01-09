@@ -58,6 +58,9 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.selectedAudioDeviceUID") var selectedAudioDeviceUID: String = ""
     @AppStorage("lyricMode.whisperPrompt") var whisperPrompt: String = ""
     
+    // Apple Speech specific settings
+    @AppStorage("lyricMode.useAppleSpeechLegacyAPI") var useAppleSpeechLegacyAPI: Bool = false
+    
     static let shared = LyricModeSettings()
     
     private init() {}

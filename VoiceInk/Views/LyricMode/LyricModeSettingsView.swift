@@ -279,16 +279,31 @@ struct LyricModeSettingsView: View {
                         }
                     }
                 } else {
-                    // Apple Speech - no model selection needed
-                    HStack {
-                        Label("Model", systemImage: "apple.logo")
-                            .foregroundColor(.primary)
-                            .frame(width: 120, alignment: .leading)
+                    // Apple Speech settings
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label("Model", systemImage: "apple.logo")
+                                .foregroundColor(.primary)
+                                .frame(width: 120, alignment: .leading)
+                            
+                            Spacer()
+                            
+                            Text("Apple Speech Recognition")
+                                .foregroundColor(.secondary)
+                        }
                         
-                        Spacer()
-                        
-                        Text("Apple Speech Recognition")
-                            .foregroundColor(.secondary)
+                        if #available(macOS 26, *) {
+                            Divider()
+                            
+                            Toggle(isOn: $settings.useAppleSpeechLegacyAPI) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Use Legacy API")
+                                    Text("Use SFSpeechRecognizer instead of SpeechTranscriber")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
                     }
                 }
                 
