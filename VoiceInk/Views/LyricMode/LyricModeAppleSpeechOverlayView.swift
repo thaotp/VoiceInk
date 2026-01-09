@@ -45,15 +45,33 @@ struct LyricModeAppleSpeechOverlayView: View {
     private func processTranscription(_ text: String) {
         guard !text.isEmpty else { return }
         
+        // Remove overlap with existing content
+        let existingText = confirmedLines.joined(separator: " ")
+        guard let processedText = TranscriptTextProcessor.removeOverlap(from: text, existingText: existingText) else {
+            return // All content already exists
+        }
+        
         // Split text into sentences using punctuation
-        let sentences = splitIntoSentences(text)
+        let sentences = splitIntoSentences(processedText)
         
         withAnimation(.easeOut(duration: 0.3)) {
             for sentence in sentences {
                 let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    confirmedLines.append(trimmed)
+                guard !trimmed.isEmpty else { continue }
+                
+                // Check for duplicates
+                if let lastLine = confirmedLines.last {
+                    if TranscriptTextProcessor.isDuplicate(trimmed, of: lastLine) {
+                        continue
+                    }
+                    // Handle cumulative update
+                    if TranscriptTextProcessor.isCumulativeUpdate(trimmed, of: lastLine) {
+                        confirmedLines[confirmedLines.count - 1] = trimmed
+                        continue
+                    }
                 }
+                
+                confirmedLines.append(trimmed)
             }
         }
     }

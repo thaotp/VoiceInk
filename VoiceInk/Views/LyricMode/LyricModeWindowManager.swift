@@ -291,6 +291,10 @@ final class LyricModeWindowManager: ObservableObject {
     
     func clear() {
         transcriptionEngine?.clear()
+        appleSpeechService?.clear()
+        
+        // Destroy old overlay so a fresh one is created on next show
+        deinitializeWindow()
     }
     
     // MARK: - Private Methods

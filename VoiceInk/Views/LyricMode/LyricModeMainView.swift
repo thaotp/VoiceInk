@@ -9,13 +9,14 @@ struct LyricModeMainView: View {
     
     @State private var showingSettings = false
     @State private var recordingDuration: TimeInterval = 0
-    @State private var transcriptText: String = ""
+    @State private var transcriptSegments: [String] = []  // Array for paragraph-based display
     @State private var partialText: String = ""
     @State private var translatedText: String = ""
     @State private var timer: Timer?
     @State private var cancellables = Set<AnyCancellable>()
     @State private var isPaused = false
     @State private var isTranslateEnabled = false
+    @State private var shouldAutoScroll = true
     
     var body: some View {
         VStack(spacing: 0) {
@@ -125,30 +126,52 @@ struct LyricModeMainView: View {
     private var speechContentView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    if transcriptText.isEmpty && partialText.isEmpty && !lyricModeManager.isRecording {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    if transcriptSegments.isEmpty && partialText.isEmpty && !lyricModeManager.isRecording {
                         emptyState
                     } else {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if !transcriptText.isEmpty {
-                                Text(transcriptText)
-                                    .font(.system(size: settings.fontSize))
-                                    .foregroundColor(.primary)
-                                    .textSelection(.enabled)
-                            }
-                            
-                            if !partialText.isEmpty {
-                                Text(partialText)
-                                    .font(.system(size: settings.fontSize))
-                                    .foregroundColor(.cyan)
-                                    .id("partial")
-                            }
+                        // Display each transcript segment as a paragraph
+                        ForEach(Array(transcriptSegments.enumerated()), id: \.offset) { index, segment in
+                            TranscriptParagraphView(
+                                text: segment,
+                                fontSize: settings.fontSize,
+                                isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty
+                            )
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
+                        
+                        // Partial (in-progress) text
+                        if !partialText.isEmpty {
+                            Text(partialText)
+                                .font(.system(size: settings.fontSize))
+                                .foregroundColor(.cyan)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id("partial")
+                        }
+                        
+                        // Scroll anchor
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottom")
                     }
                 }
+                .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, minHeight: 200)
+            }
+            .onChange(of: transcriptSegments.count) { _, _ in
+                if shouldAutoScroll {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: partialText) { _, _ in
+                if shouldAutoScroll {
+                    withAnimation(.easeOut(duration: 0.1)) {
+                        proxy.scrollTo("partial", anchor: .bottom)
+                    }
+                }
             }
         }
     }
@@ -213,7 +236,8 @@ struct LyricModeMainView: View {
             Text(formattedDuration)
                 .font(.system(size: 16, weight: .medium, design: .monospaced))
                 .foregroundColor(.secondary)
-                .frame(width: 80)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             
             Spacer()
             
@@ -244,8 +268,8 @@ struct LyricModeMainView: View {
                     }
             }
             .buttonStyle(.plain)
-            .disabled(transcriptText.isEmpty && !lyricModeManager.isRecording)
-            .opacity(transcriptText.isEmpty && !lyricModeManager.isRecording ? 0.3 : 1)
+            .disabled(transcriptSegments.isEmpty && !lyricModeManager.isRecording)
+            .opacity(transcriptSegments.isEmpty && !lyricModeManager.isRecording ? 0.3 : 1)
             .help("Clear and Reset")
         }
         .padding(.horizontal, 20)
@@ -360,7 +384,7 @@ struct LyricModeMainView: View {
         if lyricModeManager.isRecording || isPaused {
             lyricModeManager.stopRecording()
         }
-        transcriptText = ""
+        transcriptSegments = []
         partialText = ""
         recordingDuration = 0
         isPaused = false
@@ -395,8 +419,8 @@ struct LyricModeMainView: View {
         // Subscribe to transcription updates from the manager
         lyricModeManager.transcriptionPublisher
             .receive(on: DispatchQueue.main)
-            .sink { text in
-                transcriptText += text + " "
+            .sink { [self] text in
+                processNewTranscriptSegment(text)
             }
             .store(in: &cancellables)
         
@@ -406,6 +430,52 @@ struct LyricModeMainView: View {
                 partialText = text
             }
             .store(in: &cancellables)
+    }
+    
+    /// Process a new transcript segment with overlap detection and sentence continuity
+    private func processNewTranscriptSegment(_ text: String) {
+        var trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+        
+        // Remove overlap with existing content
+        let existingText = transcriptSegments.joined(separator: " ")
+        if let processedText = TranscriptTextProcessor.removeOverlap(from: trimmedText, existingText: existingText) {
+            trimmedText = processedText
+        } else {
+            return // All content already exists
+        }
+        
+        // Check for duplicates with last segment
+        if let lastSegment = transcriptSegments.last {
+            if TranscriptTextProcessor.isDuplicate(trimmedText, of: lastSegment) {
+                return
+            }
+            // Handle cumulative update (new text extends last segment)
+            if TranscriptTextProcessor.isCumulativeUpdate(trimmedText, of: lastSegment) {
+                transcriptSegments[transcriptSegments.count - 1] = trimmedText
+                return
+            }
+        }
+        
+        // Handle sentence continuity - merge incomplete sentences
+        if let lastIndex = transcriptSegments.indices.last {
+            let previousSegment = transcriptSegments[lastIndex]
+            
+            if let (complete, incomplete) = TranscriptTextProcessor.extractIncompleteSentence(from: previousSegment) {
+                // Update previous segment with complete part only
+                transcriptSegments[lastIndex] = complete
+                // Prepend incomplete part to new segment
+                transcriptSegments.append(incomplete + trimmedText)
+                return
+            } else if !TranscriptTextProcessor.endsWithCompleteSentence(previousSegment) {
+                // Entire previous segment is incomplete - merge
+                transcriptSegments[lastIndex] = previousSegment + trimmedText
+                return
+            }
+        }
+        
+        // Normal case: append as new paragraph
+        transcriptSegments.append(trimmedText)
     }
 }
 
@@ -626,5 +696,37 @@ struct LyricModeSettingsPopup: View {
             
             Toggle("Click-through overlay", isOn: $settings.isClickThroughEnabled)
         }
+    }
+}
+
+// MARK: - Transcript Paragraph View
+
+/// A view that displays a single transcript paragraph with improved readability
+struct TranscriptParagraphView: View {
+    let text: String
+    let fontSize: CGFloat
+    let isLatest: Bool
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            // Visual indicator bar
+            RoundedRectangle(cornerRadius: 2)
+                .fill(isLatest ? Color.accentColor : Color.secondary.opacity(0.3))
+                .frame(width: 3)
+            
+            // Text content
+            Text(text)
+                .font(.system(size: fontSize, weight: .regular))
+                .foregroundColor(.primary)
+                .lineSpacing(4)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isLatest ? Color.accentColor.opacity(0.05) : Color.clear)
+        )
     }
 }

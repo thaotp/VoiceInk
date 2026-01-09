@@ -19,6 +19,9 @@ final class AppleSpeechRealtimeService: ObservableObject {
     /// Publisher for finalized transcription segments
     let transcriptionPublisher = PassthroughSubject<String, Never>()
     
+    /// Publisher that fires when content is cleared
+    let clearedPublisher = PassthroughSubject<Void, Never>()
+    
     // MARK: - Private Properties
     
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "AppleSpeechRealtime")
@@ -163,25 +166,26 @@ final class AppleSpeechRealtimeService: ObservableObject {
         transcript = ""
         partialTranscript = ""
         lastFinalizedText = ""
+        clearedPublisher.send()
     }
     
     // MARK: - SpeechTranscriber (macOS 26+)
     
     @available(macOS 26, *)
     private func startWithSpeechTranscriber() async throws {
-        logger.info("Starting SpeechTranscriber (macOS 26+) - no restart required")
+        logger.info("Starting SpeechTranscriber (macOS 26+) - optimized for low latency")
         usingSpeechTranscriber = true
         
         // Create async stream for audio input
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         self.inputContinuation = continuation
         
-        // Create transcriber with settings for maximum update frequency
-        // Empty transcriptionOptions and using volatileResults gives us the most frequent partial updates
+        // Create transcriber with maximum speed settings
+        // .fastResults + .volatileResults = lowest latency configuration
         let transcriber = SpeechTranscriber(
             locale: selectedLocale,
             transcriptionOptions: [],  // No filtering - get all updates
-            reportingOptions: [.volatileResults],  // Get unstable but immediate partial results
+            reportingOptions: [.volatileResults, .fastResults],  // Fast + volatile for lowest latency
             attributeOptions: []
         )
         
@@ -206,45 +210,48 @@ final class AppleSpeechRealtimeService: ObservableObject {
         // Create converter if formats differ (Native is usually Float32, Analyzer wants Int16)
         let converter = AVAudioConverter(from: recordingFormat, to: analyzerFormat)
         
+        // High-priority queue for audio processing to minimize latency
+        let audioProcessingQueue = DispatchQueue(label: "com.voiceink.audioProcessing", qos: .userInteractive)
+        
         // Install tap with small buffer for maximum update frequency (256 = ~5ms at 48kHz)
         inputNode.installTap(onBus: 0, bufferSize: 256, format: recordingFormat) { [weak self] buffer, _ in
             guard let self = self else { return }
             
-            var bufferToSend = buffer
-            
-            // Convert if needed
-            if let converter = converter, converter.inputFormat != converter.outputFormat {
-                // Calculate output frame capacity
-                let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
-                let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
+            // Process on high-priority queue
+            audioProcessingQueue.async {
+                var bufferToSend = buffer
                 
-                if let outputBuffer = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: capacity) {
-                    var error: NSError?
-                    let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
-                        outStatus.pointee = .haveData
-                        return buffer
-                    }
+                // Convert if needed
+                if let converter = converter, converter.inputFormat != converter.outputFormat {
+                    // Calculate output frame capacity
+                    let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
+                    let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
                     
-                    converter.convert(to: outputBuffer, error: &error, withInputFrom: inputBlock)
-                    
-                    if error == nil {
-                        bufferToSend = outputBuffer
-                    } else {
-                        // Log conversation error?
-                        // self.logger.error("Conversion error: \(error!)") // strict concurrency capture risk?
+                    if let outputBuffer = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: capacity) {
+                        var error: NSError?
+                        let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
+                            outStatus.pointee = .haveData
+                            return buffer
+                        }
+                        
+                        converter.convert(to: outputBuffer, error: &error, withInputFrom: inputBlock)
+                        
+                        if error == nil {
+                            bufferToSend = outputBuffer
+                        }
                     }
                 }
-            }
-            
-            // Send to analyzer
-            let input = AnalyzerInput(buffer: bufferToSend)
-            if let continuation = self.inputContinuation as? AsyncStream<AnalyzerInput>.Continuation {
-                continuation.yield(input)
+                
+                // Send to analyzer
+                let input = AnalyzerInput(buffer: bufferToSend)
+                if let continuation = self.inputContinuation as? AsyncStream<AnalyzerInput>.Continuation {
+                    continuation.yield(input)
+                }
             }
         }
         
-        // Start recognition task
-        recognitionTask = Task {
+        // Warm up: Start the analyzer BEFORE audio engine to reduce initial latency
+        recognitionTask = Task(priority: .userInitiated) {
             do {
                 try await analyzer.start(inputSequence: stream)
                 
@@ -271,12 +278,15 @@ final class AppleSpeechRealtimeService: ObservableObject {
             }
         }
         
+        // Small delay to allow analyzer to warm up
+        try await Task.sleep(for: .milliseconds(100))
+        
         // Start audio engine
         engine.prepare()
         try engine.start()
         
         isListening = true
-        logger.info("SpeechTranscriber started successfully - continuous transcription enabled")
+        logger.info("SpeechTranscriber started with low-latency optimizations")
     }
     
 
