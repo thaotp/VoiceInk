@@ -188,7 +188,7 @@ struct ContentView: View {
         case .transcribeAudio:
             AudioTranscribeView()
         case .lyricMode:
-            LyricModeSettingsView(
+            LyricModeMainView(
                 settings: LyricModeSettings.shared,
                 lyricModeManager: lyricModeManager,
                 whisperState: whisperState

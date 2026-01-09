@@ -91,11 +91,14 @@ final class AppleSpeechRealtimeService: ObservableObject {
         
         guard !isListening else { return }
         
-        // Check legacy API setting
-        let useLegacy = UserDefaults.standard.bool(forKey: "lyricMode.useAppleSpeechLegacyAPI")
+        // Check Apple Speech Mode setting
+        let modeRaw = UserDefaults.standard.string(forKey: "lyricMode.appleSpeechMode") ?? "Standard"
+        let useLegacy = modeRaw == "Legacy"
+        let useDictation = modeRaw == "Dictation"
         
-        // Try SpeechTranscriber on macOS 26+ if not forced to legacy, fall back to SFSpeechRecognizer
-        if #available(macOS 26, *), !useLegacy {
+        // Try Native SpeechAnalyzer (Standard) on macOS 26+ if not using Legacy or Dictation
+        // Note: Dictation mode uses SFSpeechRecognizer for maximum responsiveness (lowest latency)
+        if #available(macOS 26, *), !useLegacy, !useDictation {
             // Check if locale is supported by SpeechTranscriber (handling _ vs -)
             let supportedLocales = await SpeechTranscriber.supportedLocales
             let isSupported = supportedLocales.contains { 
@@ -107,8 +110,7 @@ final class AppleSpeechRealtimeService: ObservableObject {
                     try await startWithSpeechTranscriber()
                     return
                 } catch {
-                    logger.error("Failed to start SpeechTranscriber: \(error.localizedDescription), falling back...")
-                    // If SpeechTranscriber fails (e.g. model not allocated), cleanup and try fallback
+                    logger.error("Failed to start SpeechAnalyzer: \(error.localizedDescription), falling back...")
                     stopListening()
                 }
             } else {
@@ -130,6 +132,16 @@ final class AppleSpeechRealtimeService: ObservableObject {
         
         isListening = false
         logger.info("Apple Speech recognition stopped")
+    }
+    
+    func pause() {
+        audioEngine?.pause()
+        logger.info("Apple Speech recognition paused")
+    }
+    
+    func resume() {
+        try? audioEngine?.start()
+        logger.info("Apple Speech recognition resumed")
     }
     
     func processAudioBuffer(_ buffer: AVAudioPCMBuffer) {
@@ -267,6 +279,7 @@ final class AppleSpeechRealtimeService: ObservableObject {
         logger.info("SpeechTranscriber started successfully - continuous transcription enabled")
     }
     
+
     @available(macOS 26, *)
     private func stopSpeechTranscriber() {
         if let continuation = inputContinuation as? AsyncStream<AnalyzerInput>.Continuation {

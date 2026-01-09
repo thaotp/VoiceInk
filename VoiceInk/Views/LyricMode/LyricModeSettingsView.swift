@@ -295,13 +295,20 @@ struct LyricModeSettingsView: View {
                         if #available(macOS 26, *) {
                             Divider()
                             
-                            Toggle(isOn: $settings.useAppleSpeechLegacyAPI) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Use Legacy API")
-                                    Text("Use SFSpeechRecognizer instead of SpeechTranscriber")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Recognition Mode")
+                                
+                                Picker("Recognition Mode", selection: $settings.appleSpeechMode) {
+                                    ForEach(LyricModeSettings.AppleSpeechMode.allCases) { mode in
+                                        Text(mode.rawValue).tag(mode)
+                                    }
                                 }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                
+                                Text(settings.appleSpeechMode.description)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
                         }
                     }

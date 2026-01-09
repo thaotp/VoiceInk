@@ -125,6 +125,16 @@ final class RealtimeTranscriptionEngine: ObservableObject {
         currentSegmentSamples = []
     }
     
+    func pause() {
+        audioStream.stopStreaming()
+        logger.info("Real-time transcription engine paused")
+    }
+    
+    func resume() {
+        try? audioStream.startStreaming()
+        logger.info("Real-time transcription engine resumed")
+    }
+    
     // MARK: - Private Methods
     
     private func setupAudioChunkProcessing() {

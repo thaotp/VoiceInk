@@ -44,7 +44,11 @@ class LyricModeSettings: ObservableObject {
     
     var engineType: LyricModeEngineType {
         get { LyricModeEngineType(rawValue: engineTypeRaw) ?? .whisper }
-        set { engineTypeRaw = newValue.rawValue }
+        set { 
+            Task { @MainActor in
+                engineTypeRaw = newValue.rawValue 
+            }
+        }
     }
     
     // Transcription settings (separate from global settings)
@@ -59,7 +63,32 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.whisperPrompt") var whisperPrompt: String = ""
     
     // Apple Speech specific settings
-    @AppStorage("lyricMode.useAppleSpeechLegacyAPI") var useAppleSpeechLegacyAPI: Bool = false
+    @AppStorage("lyricMode.appleSpeechMode") var appleSpeechModeRaw: String = AppleSpeechMode.standard.rawValue
+    
+    var appleSpeechMode: AppleSpeechMode {
+        get { AppleSpeechMode(rawValue: appleSpeechModeRaw) ?? .standard }
+        set { 
+            Task { @MainActor in
+                appleSpeechModeRaw = newValue.rawValue
+            }
+        }
+    }
+    
+    enum AppleSpeechMode: String, CaseIterable, Identifiable {
+        case standard = "Standard" // SpeechTranscriber (High Accuracy)
+        case dictation = "Dictation" // DictationTranscriber (Fast)
+        case legacy = "Legacy" // SFSpeechRecognizer
+        
+        var id: String { rawValue }
+        
+        var description: String {
+            switch self {
+            case .standard: return "High accuracy, long form (SpeechTranscriber)"
+            case .dictation: return "Low latency, short form (DictationTranscriber)"
+            case .legacy: return "Classic API (SFSpeechRecognizer)"
+            }
+        }
+    }
     
     static let shared = LyricModeSettings()
     

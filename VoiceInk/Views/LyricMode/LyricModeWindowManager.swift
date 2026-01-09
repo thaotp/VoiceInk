@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 /// Manages the Lyric Mode overlay window lifecycle
 @MainActor
@@ -8,6 +9,12 @@ final class LyricModeWindowManager: ObservableObject {
     // MARK: - Published Properties
     
     @Published private(set) var isVisible = false
+    @Published private(set) var isRecording = false
+    @Published private(set) var isOverlayVisible = false
+    
+    // Publishers for transcription updates
+    let transcriptionPublisher = PassthroughSubject<String, Never>()
+    let partialTranscriptionPublisher = PassthroughSubject<String, Never>()
     
     // MARK: - Dependencies
     
@@ -16,10 +23,11 @@ final class LyricModeWindowManager: ObservableObject {
     private var transcriptionEngine: RealtimeTranscriptionEngine?
     private var appleSpeechService: AppleSpeechRealtimeService?
     private var whisperContext: WhisperContext?
+    private var cancellables = Set<AnyCancellable>()
     
     private let audioStreamService = RealtimeAudioStreamService()
     private let vadService = FluidAudioVADService()
-    private let settings = LyricModeSettings.shared
+    let settings = LyricModeSettings.shared
     
     // MARK: - Initialization
     
@@ -119,6 +127,166 @@ final class LyricModeWindowManager: ObservableObject {
         } else {
             try await show(with: whisperContext)
         }
+    }
+    
+    // MARK: - Notes-style Recording (without overlay by default)
+    
+    /// Start recording and transcription without showing overlay
+    func startRecording(with whisperState: WhisperState) async throws {
+        guard !isRecording else { return }
+        
+        // Configure audio device if specified
+        configureAudioDevice()
+        
+        // Start based on engine type
+        switch settings.engineType {
+        case .whisper:
+            // Find the selected model
+            let modelName = settings.selectedModelName.isEmpty 
+                ? whisperState.availableModels.first?.name ?? ""
+                : settings.selectedModelName
+            
+            guard let model = whisperState.availableModels.first(where: { $0.name == modelName }) else {
+                throw NSError(domain: "LyricMode", code: 1, userInfo: [NSLocalizedDescriptionKey: "No Whisper model available. Please download a model first."])
+            }
+            
+            // Load model if not already loaded
+            if whisperState.whisperContext == nil {
+                try await whisperState.loadModel(model)
+            }
+            
+            guard let context = whisperState.whisperContext else {
+                throw NSError(domain: "LyricMode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to load Whisper model"])
+            }
+            
+            // Set the language override for Lyrics mode
+            let language = settings.selectedLanguage == "auto" ? nil : settings.selectedLanguage
+            await context.setLanguageOverride(language)
+            
+            self.whisperContext = context
+            
+            // Configure VAD
+            vadService.configuration.minSilenceDuration = settings.softTimeout
+            vadService.configuration.maxSilenceDuration = settings.hardTimeout
+            
+            // Create engine
+            let engine = RealtimeTranscriptionEngine(
+                audioStream: audioStreamService,
+                fluidVadService: vadService
+            )
+            transcriptionEngine = engine
+            
+            // Subscribe to transcription updates
+            subscribeToWhisperTranscription(engine: engine)
+            
+            // Start transcription
+            try await engine.start(with: context)
+            
+        case .appleSpeech:
+            let speechService = AppleSpeechRealtimeService()
+            speechService.setLanguage(settings.selectedLanguage)
+            appleSpeechService = speechService
+            
+            // Subscribe to Apple Speech updates
+            subscribeToAppleSpeechTranscription(service: speechService)
+            
+            try await speechService.startListening()
+            
+        case .cloud:
+            // Cloud not implemented for real-time yet
+            throw NSError(domain: "LyricMode", code: 2, userInfo: [NSLocalizedDescriptionKey: "Cloud engine not supported for real-time"])
+        }
+        
+        isRecording = true
+        isVisible = true
+    }
+    
+    /// Stop recording
+    func stopRecording() {
+        guard isRecording else { return }
+        
+        transcriptionEngine?.stop()
+        appleSpeechService?.stopListening()
+        appleSpeechService = nil
+        
+        cancellables.removeAll()
+        isRecording = false
+    }
+    
+    /// Pause recording (keeps engine alive but stops processing)
+    func pauseRecording() {
+        transcriptionEngine?.pause()
+        appleSpeechService?.pause()
+    }
+    
+    /// Resume recording after pause
+    func resumeRecording() {
+        transcriptionEngine?.resume()
+        appleSpeechService?.resume()
+    }
+    
+    /// Toggle overlay visibility
+    func toggleOverlay() {
+        if isOverlayVisible {
+            hideOverlay()
+        } else {
+            showOverlay()
+        }
+    }
+    
+    /// Show overlay panel
+    func showOverlay() {
+        if panel == nil {
+            if appleSpeechService != nil {
+                initializeWindowForAppleSpeech()
+            } else if transcriptionEngine != nil {
+                initializeWindow()
+            }
+        }
+        panel?.show()
+        isOverlayVisible = true
+    }
+    
+    /// Hide overlay panel
+    func hideOverlay() {
+        panel?.hide()
+        isOverlayVisible = false
+    }
+    
+    // MARK: - Subscription Helpers
+    
+    private func subscribeToWhisperTranscription(engine: RealtimeTranscriptionEngine) {
+        engine.$confirmedLines
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] lines in
+                if let lastLine = lines.last, !lastLine.isEmpty {
+                    self?.transcriptionPublisher.send(lastLine)
+                }
+            }
+            .store(in: &cancellables)
+        
+        engine.$partialLine
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] text in
+                self?.partialTranscriptionPublisher.send(text)
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func subscribeToAppleSpeechTranscription(service: AppleSpeechRealtimeService) {
+        service.transcriptionPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] text in
+                self?.transcriptionPublisher.send(text)
+            }
+            .store(in: &cancellables)
+        
+        service.$partialTranscript
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] text in
+                self?.partialTranscriptionPublisher.send(text)
+            }
+            .store(in: &cancellables)
     }
     
     func clear() {
