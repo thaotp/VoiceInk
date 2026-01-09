@@ -23,6 +23,7 @@ class NativeAppleTranscriptionService: TranscriptionService {
             "ja": "ja-JP",
             "ko": "ko-KR",
             "pt": "pt-BR",
+            "vi": "vi-VN",
             "yue": "yue-CN",
             "zh": "zh-CN"
         ]
@@ -107,9 +108,9 @@ class NativeAppleTranscriptionService: TranscriptionService {
         """
         logger.notice("\(logMessage)")
 
-        guard isLocaleSupported else {
-            logger.error("Transcription failed: Locale '\(locale.identifier(.bcp47))' is not supported by SpeechTranscriber.")
-            throw ServiceError.localeNotSupported
+        if !isLocaleSupported {
+            logger.notice("Locale '\(locale.identifier(.bcp47))' not supported by SpeechTranscriber, falling back to SFSpeechRecognizer.")
+            return try await transcribeUsingSFSpeechRecognizer(audioURL: audioURL, locale: locale)
         }
         
         // Asset reservations are managed automatically by the system.
@@ -141,6 +142,55 @@ class NativeAppleTranscriptionService: TranscriptionService {
         logger.notice("Native Apple transcription is disabled in this build (future Speech APIs not enabled).")
         throw ServiceError.unsupportedOS
         #endif
+    }
+    
+    // MARK: - SFSpeechRecognizer Fallback
+    
+    /// Fallback transcription using SFSpeechRecognizer for locales not supported by SpeechTranscriber
+    private func transcribeUsingSFSpeechRecognizer(audioURL: URL, locale: Locale) async throws -> String {
+        logger.notice("Using SFSpeechRecognizer fallback for locale: \(locale.identifier)")
+        
+        // Check authorization
+        let authStatus = SFSpeechRecognizer.authorizationStatus()
+        if authStatus != .authorized {
+            let authorized = await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { status in
+                    continuation.resume(returning: status == .authorized)
+                }
+            }
+            guard authorized else {
+                throw ServiceError.transcriptionFailed
+            }
+        }
+        
+        // Create recognizer for the locale
+        guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else {
+            logger.error("SFSpeechRecognizer not available for locale: \(locale.identifier)")
+            throw ServiceError.localeNotSupported
+        }
+        
+        // Create recognition request for the audio file
+        let request = SFSpeechURLRecognitionRequest(url: audioURL)
+        request.shouldReportPartialResults = false
+        
+        // Perform recognition
+        return try await withCheckedThrowingContinuation { continuation in
+            recognizer.recognitionTask(with: request) { result, error in
+                if let error = error {
+                    self.logger.error("SFSpeechRecognizer error: \(error.localizedDescription)")
+                    continuation.resume(throwing: ServiceError.transcriptionFailed)
+                    return
+                }
+                
+                guard let result = result, result.isFinal else {
+                    return
+                }
+                
+                let transcript = result.bestTranscription.formattedString
+                self.logger.notice("SFSpeechRecognizer transcription successful. Length: \(transcript.count) characters.")
+                continuation.resume(returning: transcript)
+            }
+        }
     }
     
     

@@ -32,6 +32,8 @@
 	</array>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>VoiceInk needs screen recording access to understand context from your screen for improved transcription accuracy.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>VoiceInk uses Apple Speech Recognition for real-time transcription in Lyric Mode when the Apple Speech engine is selected.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUEnableInstallerLauncherService</key>

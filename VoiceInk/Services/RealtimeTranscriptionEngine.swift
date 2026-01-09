@@ -17,7 +17,8 @@ final class RealtimeTranscriptionEngine: ObservableObject {
     // MARK: - Services
     
     private let audioStream: RealtimeAudioStreamService
-    private let vadService: RealtimeVADService
+    private var vadService: RealtimeVADService?
+    private var fluidVadService: FluidAudioVADService?
     private var whisperContext: WhisperContext?
     
     // MARK: - Configuration
@@ -52,6 +53,13 @@ final class RealtimeTranscriptionEngine: ObservableObject {
     init(audioStream: RealtimeAudioStreamService, vadService: RealtimeVADService) {
         self.audioStream = audioStream
         self.vadService = vadService
+        self.fluidVadService = nil
+    }
+    
+    init(audioStream: RealtimeAudioStreamService, fluidVadService: FluidAudioVADService) {
+        self.audioStream = audioStream
+        self.vadService = nil
+        self.fluidVadService = fluidVadService
     }
     
     // MARK: - Public Methods
@@ -73,9 +81,20 @@ final class RealtimeTranscriptionEngine: ObservableObject {
         setupAudioChunkProcessing()
         setupVADStateHandling()
         
+        // Initialize FluidAudio VAD if using it
+        if let fluidVad = fluidVadService {
+            try await fluidVad.initialize()
+        }
+        
         // Start audio streaming
         try audioStream.startStreaming()
-        vadService.connect(to: audioStream)
+        
+        // Connect VAD to audio stream
+        if let vad = vadService {
+            vad.connect(to: audioStream)
+        } else if let fluidVad = fluidVadService {
+            fluidVad.connect(to: audioStream)
+        }
         
         isRunning = true
         logger.info("Real-time transcription engine started")
@@ -84,7 +103,8 @@ final class RealtimeTranscriptionEngine: ObservableObject {
     func stop() {
         guard isRunning else { return }
         
-        vadService.disconnect()
+        vadService?.disconnect()
+        fluidVadService?.disconnect()
         audioStream.stopStreaming()
         cancellables.removeAll()
         
@@ -117,17 +137,31 @@ final class RealtimeTranscriptionEngine: ObservableObject {
     }
     
     private func setupVADStateHandling() {
-        vadService.stateChangePublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                self?.handleVADStateChange(state)
-            }
-            .store(in: &cancellables)
+        // Subscribe to RealtimeVADService if using it
+        if let vad = vadService {
+            vad.stateChangePublisher
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] state in
+                    self?.handleVADStateChange(RealtimeVADService.toCommonState(state))
+                }
+                .store(in: &cancellables)
+        }
+        
+        // Subscribe to FluidAudioVADService if using it
+        if let fluidVad = fluidVadService {
+            fluidVad.stateChangePublisher
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] state in
+                    self?.handleVADStateChange(FluidAudioVADService.toCommonState(state))
+                }
+                .store(in: &cancellables)
+        }
     }
     
     private func handleAudioChunk(_ chunk: AudioChunk) {
-        // Accumulate samples for current segment
-        if vadService.isSpeaking || !currentSegmentSamples.isEmpty {
+        // Accumulate samples when speaking
+        let isSpeaking = vadService?.isSpeaking ?? fluidVadService?.isSpeaking ?? false
+        if isSpeaking || !currentSegmentSamples.isEmpty {
             if segmentStartTime == nil {
                 segmentStartTime = chunk.timestamp
             }
@@ -141,7 +175,7 @@ final class RealtimeTranscriptionEngine: ObservableObject {
         }
     }
     
-    private func handleVADStateChange(_ state: RealtimeVADService.SpeechState) {
+    private func handleVADStateChange(_ state: VADSpeechState) {
         switch state {
         case .speechStart:
             // Start new segment

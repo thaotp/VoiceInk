@@ -14,10 +14,11 @@ final class LyricModeWindowManager: ObservableObject {
     private var panel: LyricModeOverlayPanel?
     private var windowController: NSWindowController?
     private var transcriptionEngine: RealtimeTranscriptionEngine?
+    private var appleSpeechService: AppleSpeechRealtimeService?
     private var whisperContext: WhisperContext?
     
     private let audioStreamService = RealtimeAudioStreamService()
-    private let vadService = RealtimeVADService()
+    private let vadService = FluidAudioVADService()
     private let settings = LyricModeSettings.shared
     
     // MARK: - Initialization
@@ -32,27 +33,23 @@ final class LyricModeWindowManager: ObservableObject {
     
     // MARK: - Public Methods
     
+    /// Show Lyric Mode with Whisper engine
     func show(with whisperContext: WhisperContext) async throws {
         guard !isVisible else { return }
         
         self.whisperContext = whisperContext
         
         // Configure audio device if specified
-        if !settings.selectedAudioDeviceUID.isEmpty {
-            let audioDeviceManager = AudioDeviceManager.shared
-            if let device = audioDeviceManager.availableDevices.first(where: { $0.uid == settings.selectedAudioDeviceUID }) {
-                try? AudioDeviceConfiguration.setDefaultInputDevice(device.id)
-            }
-        }
+        configureAudioDevice()
         
         // Configure VAD with settings
         vadService.configuration.minSilenceDuration = settings.softTimeout
         vadService.configuration.maxSilenceDuration = settings.hardTimeout
         
-        // Create transcription engine
+        // Create transcription engine with FluidAudio VAD
         let engine = RealtimeTranscriptionEngine(
             audioStream: audioStreamService,
-            vadService: vadService
+            fluidVadService: vadService
         )
         transcriptionEngine = engine
         
@@ -67,11 +64,46 @@ final class LyricModeWindowManager: ObservableObject {
         isVisible = true
     }
     
+    /// Show Lyric Mode with Apple Speech engine
+    func showWithAppleSpeech() async throws {
+        guard !isVisible else { return }
+        
+        // Configure audio device if specified
+        configureAudioDevice()
+        
+        // Create Apple Speech service
+        let speechService = AppleSpeechRealtimeService()
+        speechService.setLanguage(settings.selectedLanguage)
+        appleSpeechService = speechService
+        
+        // Create a simple transcription engine for display
+        // We'll use the speech service directly for transcription
+        let engine = RealtimeTranscriptionEngine(
+            audioStream: audioStreamService,
+            fluidVadService: vadService
+        )
+        transcriptionEngine = engine
+        
+        // Initialize window
+        initializeWindowForAppleSpeech()
+        
+        // Start Apple Speech listening (requests authorization if needed)
+        try await speechService.startListening()
+        
+        // Show panel
+        panel?.show()
+        isVisible = true
+    }
+    
     func hide() {
         guard isVisible else { return }
         
-        // Stop transcription
+        // Stop transcription engine
         transcriptionEngine?.stop()
+        
+        // Stop Apple Speech if active
+        appleSpeechService?.stopListening()
+        appleSpeechService = nil
         
         // Hide and cleanup window
         panel?.hide()
@@ -108,6 +140,15 @@ final class LyricModeWindowManager: ObservableObject {
         hide()
     }
     
+    private func configureAudioDevice() {
+        if !settings.selectedAudioDeviceUID.isEmpty {
+            let audioDeviceManager = AudioDeviceManager.shared
+            if let device = audioDeviceManager.availableDevices.first(where: { $0.uid == settings.selectedAudioDeviceUID }) {
+                try? AudioDeviceConfiguration.setDefaultInputDevice(device.id)
+            }
+        }
+    }
+    
     private func initializeWindow() {
         deinitializeWindow()
         
@@ -118,6 +159,26 @@ final class LyricModeWindowManager: ObservableObject {
         
         let overlayView = LyricModeOverlayView(
             transcriptionEngine: engine,
+            settings: settings
+        )
+        
+        let hostingController = NSHostingController(rootView: overlayView)
+        overlayPanel.contentView = hostingController.view
+        
+        self.panel = overlayPanel
+        self.windowController = NSWindowController(window: overlayPanel)
+    }
+    
+    private func initializeWindowForAppleSpeech() {
+        deinitializeWindow()
+        
+        let overlayPanel = LyricModeOverlayPanel()
+        overlayPanel.isClickThroughEnabled = settings.isClickThroughEnabled
+        
+        guard let speechService = appleSpeechService else { return }
+        
+        let overlayView = LyricModeAppleSpeechOverlayView(
+            speechService: speechService,
             settings: settings
         )
         

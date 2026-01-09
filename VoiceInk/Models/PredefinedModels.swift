@@ -7,7 +7,7 @@ import Foundation
         } else {
             // For Apple Native models, return only supported languages in simple format
             if provider == .nativeApple {
-                let appleSupportedCodes = ["ar", "de", "en", "es", "fr", "it", "ja", "ko", "pt", "yue", "zh"]
+                let appleSupportedCodes = ["ar", "de", "en", "es", "fr", "it", "ja", "ko", "pt", "vi", "yue", "zh"]
                 return allLanguages.filter { appleSupportedCodes.contains($0.key) }
             }
             return allLanguages
@@ -70,7 +70,10 @@ import Foundation
         "it-CH": "Italian (Switzerland)",
         
         // Arabic
-        "ar-SA": "Arabic (Saudi Arabia)"
+        "ar-SA": "Arabic (Saudi Arabia)",
+        
+        // Vietnamese
+        "vi-VN": "Vietnamese (Vietnam)"
     ]
     
     static var models: [any TranscriptionModel] {
