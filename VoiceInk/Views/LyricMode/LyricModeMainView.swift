@@ -66,6 +66,7 @@ struct LyricModeMainView: View {
             LyricModeSettingsPopup(
                 settings: settings,
                 whisperState: whisperState,
+                isRecording: lyricModeManager.isRecording,
                 onSettingsApplied: { audioDeviceChanged, engineChanged in
                     // Settings applied. Note: Audio device changes will take effect on next recording session.
                 }
@@ -606,6 +607,9 @@ struct LyricModeSettingsPopup: View {
     @ObservedObject var audioDeviceManager = AudioDeviceManager.shared
     @Environment(\.dismiss) private var dismiss
     
+    // Whether recording is currently active
+    var isRecording: Bool = false
+    
     // Callback when settings are applied
     var onSettingsApplied: ((_ audioDeviceChanged: Bool, _ engineChanged: Bool) -> Void)?
     
@@ -712,8 +716,13 @@ struct LyricModeSettingsPopup: View {
                     }
                 }
                 .labelsHidden()
+                .disabled(isRecording)
                 
-                if !localSelectedAudioDeviceUID.isEmpty {
+                if isRecording {
+                    Text("Stop recording to change audio input")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                } else if !localSelectedAudioDeviceUID.isEmpty {
                     if let device = audioDeviceManager.availableDevices.first(where: { $0.uid == localSelectedAudioDeviceUID }) {
                         Text("Will use: \(device.name)")
                             .font(.caption)
@@ -749,6 +758,13 @@ struct LyricModeSettingsPopup: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                .disabled(isRecording)
+                
+                if isRecording {
+                    Text("Stop recording to change engine")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
             }
             
             // Engine-specific configuration

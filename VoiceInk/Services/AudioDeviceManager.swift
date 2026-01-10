@@ -446,6 +446,9 @@ class AudioDeviceManager: ObservableObject {
     
     private func handleDeviceListChange() {
         logger.info("Device list change detected")
+        
+        // Notify observers about device list change (e.g., for Lyric Mode to pause/resume)
+        NotificationCenter.default.post(name: NSNotification.Name("AudioDeviceListChanged"), object: nil)
 
         // Don't change devices while recording is active
         // This prevents audio engine errors during recording startup

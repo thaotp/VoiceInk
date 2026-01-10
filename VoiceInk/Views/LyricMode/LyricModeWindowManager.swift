@@ -29,6 +29,7 @@ final class LyricModeWindowManager: ObservableObject {
     private var appleSpeechService: AppleSpeechRealtimeService?
     private var whisperContext: WhisperContext?
     private var cancellables = Set<AnyCancellable>()
+    private var deviceChangeWorkItem: DispatchWorkItem?
     
     private let audioStreamService = RealtimeAudioStreamService()
     private let vadService = FluidAudioVADService()
@@ -311,10 +312,36 @@ final class LyricModeWindowManager: ObservableObject {
             name: NSNotification.Name("HideLyricModeOverlay"),
             object: nil
         )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDeviceListChange),
+            name: NSNotification.Name("AudioDeviceListChanged"),
+            object: nil
+        )
     }
     
     @objc private func handleHideOverlayNotification() {
         hideOverlay()
+    }
+    
+    @objc private func handleDeviceListChange() {
+        // If recording with Apple Speech, pause and resume to handle device change
+        guard isRecording, let speechService = appleSpeechService else { return }
+        
+        // Cancel any pending resume to debounce rapid notifications
+        deviceChangeWorkItem?.cancel()
+        
+        print("LyricMode: Device list changed during recording, pausing and resuming Apple Speech")
+        speechService.pause()
+        
+        // Small delay then resume (debounced)
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self, self.isRecording else { return }
+            self.appleSpeechService?.resume()
+        }
+        deviceChangeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: workItem)
     }
     
     private func configureAudioDevice() {
