@@ -12,6 +12,11 @@ final class LyricModeWindowManager: ObservableObject {
     @Published private(set) var isRecording = false
     @Published private(set) var isOverlayVisible = false
     
+    // Content state (persists across tab switches)
+    @Published var transcriptSegments: [String] = []
+    @Published var partialText: String = ""
+    @Published var recordingDuration: TimeInterval = 0
+    
     // Publishers for transcription updates
     let transcriptionPublisher = PassthroughSubject<String, Never>()
     let partialTranscriptionPublisher = PassthroughSubject<String, Never>()

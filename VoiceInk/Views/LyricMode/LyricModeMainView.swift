@@ -8,15 +8,42 @@ struct LyricModeMainView: View {
     @ObservedObject var whisperState: WhisperState
     
     @State private var showingSettings = false
-    @State private var recordingDuration: TimeInterval = 0
-    @State private var transcriptSegments: [String] = []  // Array for paragraph-based display
-    @State private var partialText: String = ""
     @State private var translatedText: String = ""
     @State private var timer: Timer?
     @State private var cancellables = Set<AnyCancellable>()
     @State private var isPaused = false
     @State private var isTranslateEnabled = false
     @State private var shouldAutoScroll = true
+    
+    // Convenience accessors for manager's content state
+    private var transcriptSegments: [String] {
+        get { lyricModeManager.transcriptSegments }
+        nonmutating set { lyricModeManager.transcriptSegments = newValue }
+    }
+    
+    private var partialText: String {
+        get { lyricModeManager.partialText }
+        nonmutating set { lyricModeManager.partialText = newValue }
+    }
+    
+    private var recordingDuration: TimeInterval {
+        get { lyricModeManager.recordingDuration }
+        nonmutating set { lyricModeManager.recordingDuration = newValue }
+    }
+    
+    /// Get the display name for the selected audio device
+    private var selectedAudioDeviceName: String {
+        if settings.selectedAudioDeviceUID.isEmpty {
+            return "Default"
+        }
+        let devices = AudioDeviceManager.shared.availableDevices
+        if let device = devices.first(where: { $0.uid == settings.selectedAudioDeviceUID }) {
+            // Shorten name for header display
+            let name = device.name
+            return name.count > 20 ? String(name.prefix(17)) + "..." : name
+        }
+        return "Default"
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -58,6 +85,41 @@ struct LyricModeMainView: View {
         .onReceive(NotificationCenter.default.publisher(for: .lyricModeClearAndReset)) { _ in
             clearAndReset()
         }
+        .onChange(of: settings.selectedAudioDeviceUID) { _, newValue in
+            // Hot-swap audio device if recording is in progress
+            if lyricModeManager.isRecording {
+                Task {
+                    await restartRecordingWithNewDevice()
+                }
+            }
+        }
+    }
+    
+    /// Restart recording to apply new audio device selection
+    private func restartRecordingWithNewDevice() async {
+        // Remember pause state
+        let wasPaused = isPaused
+        
+        // Stop current recording (but don't clear content)
+        lyricModeManager.stopRecording()
+        cancellables.removeAll()
+        
+        // Small delay to allow cleanup
+        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        
+        // Start new recording with new device
+        do {
+            try await lyricModeManager.startRecording(with: whisperState)
+            subscribeToTranscription()
+            
+            // Restore pause state if needed
+            if wasPaused {
+                isPaused = true
+                lyricModeManager.pauseRecording()
+            }
+        } catch {
+            print("Failed to restart recording with new device: \(error)")
+        }
     }
     
     // MARK: - Header
@@ -74,9 +136,12 @@ struct LyricModeMainView: View {
                     Label(settings.engineType.rawValue, systemImage: settings.engineType.icon)
                     Text("•")
                     Text(settings.selectedLanguage == "auto" ? "Auto" : settings.selectedLanguage.uppercased())
+                    Text("•")
+                    Label(selectedAudioDeviceName, systemImage: "mic")
                 }
                 .font(.caption)
                 .foregroundColor(.secondary)
+                .lineLimit(1)
             }
             
             Spacer()
@@ -504,12 +569,17 @@ struct LyricModeMainView: View {
 struct LyricModeSettingsPopup: View {
     @ObservedObject var settings: LyricModeSettings
     @ObservedObject var whisperState: WhisperState
+    @ObservedObject var audioDeviceManager = AudioDeviceManager.shared
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    audioInputSection
+                    
+                    Divider()
+                    
                     transcriptionSettingsSection
                     
                     Divider()
@@ -529,6 +599,39 @@ struct LyricModeSettingsPopup: View {
                 }
             }
             .navigationTitle("Lyric Mode Settings")
+        }
+    }
+    
+    // MARK: - Audio Input
+    
+    private var audioInputSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Audio Input")
+                .font(.headline)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Microphone", selection: $settings.selectedAudioDeviceUID) {
+                    Text("System Default")
+                        .tag("")
+                    ForEach(audioDeviceManager.availableDevices, id: \.uid) { device in
+                        Text(device.name)
+                            .tag(device.uid)
+                    }
+                }
+                .labelsHidden()
+                
+                if !settings.selectedAudioDeviceUID.isEmpty {
+                    if let device = audioDeviceManager.availableDevices.first(where: { $0.uid == settings.selectedAudioDeviceUID }) {
+                        Text("Using: \(device.name)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    Text("Using system default input device")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
     }
     
