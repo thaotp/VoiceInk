@@ -63,7 +63,13 @@ struct LyricModeMainView: View {
         .frame(minWidth: 400, minHeight: 500)
         .background(Color(NSColor.windowBackgroundColor))
         .sheet(isPresented: $showingSettings) {
-            LyricModeSettingsPopup(settings: settings, whisperState: whisperState)
+            LyricModeSettingsPopup(
+                settings: settings,
+                whisperState: whisperState,
+                onSettingsApplied: { audioDeviceChanged, engineChanged in
+                    // Settings applied. Note: Audio device changes will take effect on next recording session.
+                }
+            )
         }
         .onChange(of: lyricModeManager.isRecording) { _, isRecording in
             if isRecording {
@@ -85,41 +91,6 @@ struct LyricModeMainView: View {
         .onReceive(NotificationCenter.default.publisher(for: .lyricModeClearAndReset)) { _ in
             clearAndReset()
         }
-        .onChange(of: settings.selectedAudioDeviceUID) { _, newValue in
-            // Hot-swap audio device if recording is in progress
-            if lyricModeManager.isRecording {
-                Task {
-                    await restartRecordingWithNewDevice()
-                }
-            }
-        }
-    }
-    
-    /// Restart recording to apply new audio device selection
-    private func restartRecordingWithNewDevice() async {
-        // Remember pause state
-        let wasPaused = isPaused
-        
-        // Stop current recording (but don't clear content)
-        lyricModeManager.stopRecording()
-        cancellables.removeAll()
-        
-        // Small delay to allow cleanup
-        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-        
-        // Start new recording with new device
-        do {
-            try await lyricModeManager.startRecording(with: whisperState)
-            subscribeToTranscription()
-            
-            // Restore pause state if needed
-            if wasPaused {
-                isPaused = true
-                lyricModeManager.pauseRecording()
-            }
-        } catch {
-            print("Failed to restart recording with new device: \(error)")
-        }
     }
     
     // MARK: - Header
@@ -127,9 +98,14 @@ struct LyricModeMainView: View {
     private var headerSection: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Lyric Mode")
-                    .font(.headline)
-                    .fontWeight(.semibold)
+                HStack(spacing: 8) {
+                    Text("Lyric Mode")
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                    
+                    // Audio input status indicator
+                    audioStatusIndicator
+                }
                 
                 // Current settings info
                 HStack(spacing: 8) {
@@ -175,6 +151,64 @@ struct LyricModeMainView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+    
+    /// Audio input status indicator showing connection/recording state
+    private var audioStatusIndicator: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(audioStatusColor)
+                .frame(width: 8, height: 8)
+                .overlay(
+                    Circle()
+                        .stroke(audioStatusColor.opacity(0.3), lineWidth: 2)
+                        .scaleEffect(lyricModeManager.isRecording && !isPaused ? 1.5 : 1.0)
+                        .opacity(lyricModeManager.isRecording && !isPaused ? 0.0 : 1.0)
+                        .animation(
+                            lyricModeManager.isRecording && !isPaused ?
+                            Animation.easeOut(duration: 1.0).repeatForever(autoreverses: false) :
+                            .default,
+                            value: lyricModeManager.isRecording
+                        )
+                )
+            
+            Text(audioStatusText)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(
+            Capsule()
+                .fill(audioStatusColor.opacity(0.1))
+        )
+    }
+    
+    private var audioStatusColor: Color {
+        if !isAudioDeviceAvailable {
+            return .red
+        } else if lyricModeManager.isRecording {
+            return isPaused ? .orange : .green
+        } else {
+            return .gray
+        }
+    }
+    
+    private var audioStatusText: String {
+        if !isAudioDeviceAvailable {
+            return "No Device"
+        } else if lyricModeManager.isRecording {
+            return isPaused ? "Paused" : "Recording"
+        } else {
+            return "Ready"
+        }
+    }
+    
+    private var isAudioDeviceAvailable: Bool {
+        if settings.selectedAudioDeviceUID.isEmpty {
+            return true // Using system default
+        }
+        return AudioDeviceManager.shared.availableDevices.contains { $0.uid == settings.selectedAudioDeviceUID }
     }
     
     // MARK: - Transcription Area
@@ -572,6 +606,18 @@ struct LyricModeSettingsPopup: View {
     @ObservedObject var audioDeviceManager = AudioDeviceManager.shared
     @Environment(\.dismiss) private var dismiss
     
+    // Callback when settings are applied
+    var onSettingsApplied: ((_ audioDeviceChanged: Bool, _ engineChanged: Bool) -> Void)?
+    
+    // Local state copies (changes are applied on Done)
+    @State private var localEngineType: LyricModeEngineType = .appleSpeech
+    @State private var localSelectedLanguage: String = "en-US"
+    @State private var localSelectedModelName: String = ""
+    @State private var localSelectedAudioDeviceUID: String = ""
+    @State private var localFontSize: Double = 24
+    @State private var localShowPartialHighlight: Bool = true
+    @State private var localAutoShowOverlay: Bool = true
+    
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -594,12 +640,59 @@ struct LyricModeSettingsPopup: View {
             }
             .frame(width: 450, height: 500)
             .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Update") { applySettingsAndDismiss() }
+                        .disabled(!hasChanges)
                 }
             }
             .navigationTitle("Lyric Mode Settings")
         }
+        .onAppear {
+            // Initialize local state from current settings
+            localEngineType = settings.engineType
+            localSelectedLanguage = settings.selectedLanguage
+            localSelectedModelName = settings.selectedModelName
+            localSelectedAudioDeviceUID = settings.selectedAudioDeviceUID
+            localFontSize = settings.fontSize
+            localShowPartialHighlight = settings.showPartialHighlight
+            localAutoShowOverlay = settings.autoShowOverlay
+        }
+    }
+    
+    /// Check if any settings have been modified
+    private var hasChanges: Bool {
+        localEngineType != settings.engineType ||
+        localSelectedLanguage != settings.selectedLanguage ||
+        localSelectedModelName != settings.selectedModelName ||
+        localSelectedAudioDeviceUID != settings.selectedAudioDeviceUID ||
+        localFontSize != settings.fontSize ||
+        localShowPartialHighlight != settings.showPartialHighlight ||
+        localAutoShowOverlay != settings.autoShowOverlay
+    }
+    
+    private func applySettingsAndDismiss() {
+        // Check what changed
+        let audioDeviceChanged = localSelectedAudioDeviceUID != settings.selectedAudioDeviceUID
+        let engineChanged = localEngineType != settings.engineType || 
+                           localSelectedLanguage != settings.selectedLanguage ||
+                           localSelectedModelName != settings.selectedModelName
+        
+        // Apply all settings
+        settings.engineType = localEngineType
+        settings.selectedLanguage = localSelectedLanguage
+        settings.selectedModelName = localSelectedModelName
+        settings.selectedAudioDeviceUID = localSelectedAudioDeviceUID
+        settings.fontSize = localFontSize
+        settings.showPartialHighlight = localShowPartialHighlight
+        settings.autoShowOverlay = localAutoShowOverlay
+        
+        // Notify about changes that need recording restart
+        onSettingsApplied?(audioDeviceChanged, engineChanged)
+        
+        dismiss()
     }
     
     // MARK: - Audio Input
@@ -610,7 +703,7 @@ struct LyricModeSettingsPopup: View {
                 .font(.headline)
             
             VStack(alignment: .leading, spacing: 8) {
-                Picker("Microphone", selection: $settings.selectedAudioDeviceUID) {
+                Picker("Microphone", selection: $localSelectedAudioDeviceUID) {
                     Text("System Default")
                         .tag("")
                     ForEach(audioDeviceManager.availableDevices, id: \.uid) { device in
@@ -620,14 +713,14 @@ struct LyricModeSettingsPopup: View {
                 }
                 .labelsHidden()
                 
-                if !settings.selectedAudioDeviceUID.isEmpty {
-                    if let device = audioDeviceManager.availableDevices.first(where: { $0.uid == settings.selectedAudioDeviceUID }) {
-                        Text("Using: \(device.name)")
+                if !localSelectedAudioDeviceUID.isEmpty {
+                    if let device = audioDeviceManager.availableDevices.first(where: { $0.uid == localSelectedAudioDeviceUID }) {
+                        Text("Will use: \(device.name)")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                 } else {
-                    Text("Using system default input device")
+                    Text("Will use system default input device")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -648,7 +741,7 @@ struct LyricModeSettingsPopup: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 
-                Picker("Engine", selection: $settings.engineType) {
+                Picker("Engine", selection: $localEngineType) {
                     ForEach(LyricModeEngineType.allCases) { type in
                         Label(type.rawValue, systemImage: type.icon)
                             .tag(type)
@@ -660,7 +753,7 @@ struct LyricModeSettingsPopup: View {
             
             // Engine-specific configuration
             Group {
-                switch settings.engineType {
+                switch localEngineType {
                 case .whisper:
                     whisperConfigSection
                 case .appleSpeech:
@@ -677,13 +770,19 @@ struct LyricModeSettingsPopup: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 
-                Picker("Language", selection: $settings.selectedLanguage) {
+                Picker("Language", selection: $localSelectedLanguage) {
                     Text("Auto Detect").tag("auto")
+                    // Support both short codes and full locale codes
                     Text("English").tag("en")
+                    Text("English").tag("en-US")
                     Text("Japanese").tag("ja")
+                    Text("Japanese").tag("ja-JP")
                     Text("Chinese").tag("zh")
+                    Text("Chinese").tag("zh-CN")
                     Text("Korean").tag("ko")
+                    Text("Korean").tag("ko-KR")
                     Text("Vietnamese").tag("vi")
+                    Text("Vietnamese").tag("vi-VN")
                 }
                 .labelsHidden()
             }
@@ -698,7 +797,7 @@ struct LyricModeSettingsPopup: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
             
-            Picker("Model", selection: $settings.selectedModelName) {
+            Picker("Model", selection: $localSelectedModelName) {
                 if whisperState.availableModels.isEmpty {
                     Text("No models available").tag("")
                 } else {
@@ -781,12 +880,12 @@ struct LyricModeSettingsPopup: View {
                     
                     Spacer()
                     
-                    Text("\(Int(settings.fontSize))pt")
+                    Text("\(Int(localFontSize))pt")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
                 
-                Slider(value: $settings.fontSize, in: 14...48, step: 2)
+                Slider(value: $localFontSize, in: 14...48, step: 2)
             }
             
             // Background Opacity
@@ -815,9 +914,9 @@ struct LyricModeSettingsPopup: View {
             Text("Behavior")
                 .font(.headline)
             
-            Toggle("Auto-show overlay on recording", isOn: $settings.autoShowOverlay)
+            Toggle("Auto-show overlay on recording", isOn: $localAutoShowOverlay)
             
-            Toggle("Show partial results highlight", isOn: $settings.showPartialHighlight)
+            Toggle("Show partial results highlight", isOn: $localShowPartialHighlight)
             
             Toggle("Click-through overlay", isOn: $settings.isClickThroughEnabled)
         }
