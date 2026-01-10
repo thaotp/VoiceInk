@@ -63,6 +63,17 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.selectedAudioDeviceUID") var selectedAudioDeviceUID: String = ""
     @AppStorage("lyricMode.whisperPrompt") var whisperPrompt: String = ""
     
+    // AI Provider settings (for future AI features in Lyric Mode)
+    @AppStorage("lyricMode.aiProvider") var aiProviderRaw: String = "ollama"
+    @AppStorage("lyricMode.ollamaBaseURL") var ollamaBaseURL: String = "http://localhost:11434"
+    @AppStorage("lyricMode.selectedOllamaModel") var selectedOllamaModel: String = "mistral"
+    @AppStorage("lyricMode.openAIAPIKey") var openAIAPIKey: String = ""
+    @AppStorage("lyricMode.selectedOpenAIModel") var selectedOpenAIModel: String = "gpt-4o-mini"
+    
+    // Translation settings
+    @AppStorage("lyricMode.translationEnabled") var translationEnabled: Bool = false
+    @AppStorage("lyricMode.targetLanguage") var targetLanguage: String = "Vietnamese"
+    
     // Apple Speech specific settings
     @AppStorage("lyricMode.appleSpeechMode") var appleSpeechModeRaw: String = AppleSpeechMode.standard.rawValue
     

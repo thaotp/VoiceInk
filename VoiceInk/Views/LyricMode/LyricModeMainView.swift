@@ -14,6 +14,9 @@ struct LyricModeMainView: View {
     @State private var isPaused = false
     @State private var isTranslateEnabled = false
     @State private var shouldAutoScroll = true
+    @State private var translatedSegments: [String] = []
+    
+    private let translationService = LyricModeTranslationService()
     
     // Convenience accessors for manager's content state
     private var transcriptSegments: [String] {
@@ -245,11 +248,22 @@ struct LyricModeMainView: View {
                     } else {
                         // Display each transcript segment as a paragraph
                         ForEach(Array(transcriptSegments.enumerated()), id: \.offset) { index, segment in
-                            TranscriptParagraphView(
-                                text: segment,
-                                fontSize: settings.fontSize,
-                                isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty
-                            )
+                            VStack(alignment: .leading, spacing: 4) {
+                                TranscriptParagraphView(
+                                    text: segment,
+                                    fontSize: settings.fontSize,
+                                    isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty
+                                )
+                                
+                                // Show translation if enabled and available
+                                if settings.translationEnabled && index < translatedSegments.count && !translatedSegments[index].isEmpty {
+                                    Text(translatedSegments[index])
+                                        .font(.system(size: settings.fontSize * 0.85))
+                                        .foregroundColor(.secondary)
+                                        .padding(.horizontal, 31) // Align with paragraph text (16 + 15 for indicator bar)
+                                        .padding(.bottom, 4)
+                                }
+                            }
                         }
                         
                         // Partial (in-progress) text
@@ -505,6 +519,8 @@ struct LyricModeMainView: View {
             lyricModeManager.stopRecording()
         }
         transcriptSegments = []
+        translatedSegments = []
+        translationService.clearHistory() // Clear AI context
         partialText = ""
         recordingDuration = 0
         isPaused = false
@@ -572,7 +588,10 @@ struct LyricModeMainView: View {
             }
             // Handle cumulative update (new text extends last segment)
             if TranscriptTextProcessor.isCumulativeUpdate(trimmedText, of: lastSegment) {
-                transcriptSegments[transcriptSegments.count - 1] = trimmedText
+                let lastIndex = transcriptSegments.count - 1
+                transcriptSegments[lastIndex] = trimmedText
+                // Re-translate the updated segment
+                translateSegment(at: lastIndex, text: trimmedText)
                 return
             }
         }
@@ -584,18 +603,53 @@ struct LyricModeMainView: View {
             if let (complete, incomplete) = TranscriptTextProcessor.extractIncompleteSentence(from: previousSegment) {
                 // Update previous segment with complete part only
                 transcriptSegments[lastIndex] = complete
+                translateSegment(at: lastIndex, text: complete)
                 // Prepend incomplete part to new segment
-                transcriptSegments.append(incomplete + trimmedText)
+                let newText = incomplete + trimmedText
+                transcriptSegments.append(newText)
+                syncTranslatedSegmentsCount()
+                translateSegment(at: transcriptSegments.count - 1, text: newText)
                 return
             } else if !TranscriptTextProcessor.endsWithCompleteSentence(previousSegment) {
                 // Entire previous segment is incomplete - merge
-                transcriptSegments[lastIndex] = previousSegment + trimmedText
+                let mergedText = previousSegment + trimmedText
+                transcriptSegments[lastIndex] = mergedText
+                translateSegment(at: lastIndex, text: mergedText)
                 return
             }
         }
         
         // Normal case: append as new paragraph
         transcriptSegments.append(trimmedText)
+        syncTranslatedSegmentsCount()
+        translateSegment(at: transcriptSegments.count - 1, text: trimmedText)
+    }
+    
+    /// Ensure translatedSegments array matches transcriptSegments count
+    private func syncTranslatedSegmentsCount() {
+        while translatedSegments.count < transcriptSegments.count {
+            translatedSegments.append("")
+        }
+    }
+    
+    /// Translate a segment at the given index
+    private func translateSegment(at index: Int, text: String) {
+        guard settings.translationEnabled else { return }
+        
+        syncTranslatedSegmentsCount()
+        
+        Task {
+            do {
+                let translation = try await translationService.translate(text)
+                await MainActor.run {
+                    if index < translatedSegments.count {
+                        translatedSegments[index] = translation
+                    }
+                }
+            } catch {
+                print("Translation error: \(error.localizedDescription)")
+            }
+        }
     }
 }
 
@@ -621,6 +675,21 @@ struct LyricModeSettingsPopup: View {
     @State private var localFontSize: Double = 24
     @State private var localShowPartialHighlight: Bool = true
     @State private var localAutoShowOverlay: Bool = true
+    @State private var localAppleSpeechMode: LyricModeSettings.AppleSpeechMode = .standard
+    @State private var localBackgroundOpacity: Double = 0.8
+    @State private var localIsClickThroughEnabled: Bool = false
+    
+    // AI Provider state
+    @State private var localAIProvider: String = "ollama"
+    @State private var localOllamaBaseURL: String = "http://localhost:11434"
+    @State private var localSelectedOllamaModel: String = "mistral"
+    @State private var ollamaModels: [OllamaService.OllamaModel] = []
+    @State private var isCheckingOllama: Bool = false
+    @State private var isEditingOllamaURL: Bool = false
+    
+    // Translation state
+    @State private var localTranslationEnabled: Bool = false
+    @State private var localTargetLanguage: String = "Vietnamese"
     
     var body: some View {
         NavigationStack {
@@ -639,10 +708,14 @@ struct LyricModeSettingsPopup: View {
                     Divider()
                     
                     behaviorSection
+                    
+                    Divider()
+                    
+                    aiProviderSection
                 }
                 .padding(24)
             }
-            .frame(width: 450, height: 500)
+            .frame(width: 450, height: 600)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -663,6 +736,18 @@ struct LyricModeSettingsPopup: View {
             localFontSize = settings.fontSize
             localShowPartialHighlight = settings.showPartialHighlight
             localAutoShowOverlay = settings.autoShowOverlay
+            localAppleSpeechMode = settings.appleSpeechMode
+            localBackgroundOpacity = settings.backgroundOpacity
+            localIsClickThroughEnabled = settings.isClickThroughEnabled
+            
+            // AI Provider
+            localAIProvider = settings.aiProviderRaw
+            localOllamaBaseURL = settings.ollamaBaseURL
+            localSelectedOllamaModel = settings.selectedOllamaModel
+            
+            // Translation
+            localTranslationEnabled = settings.translationEnabled
+            localTargetLanguage = settings.targetLanguage
         }
     }
     
@@ -674,7 +759,15 @@ struct LyricModeSettingsPopup: View {
         localSelectedAudioDeviceUID != settings.selectedAudioDeviceUID ||
         localFontSize != settings.fontSize ||
         localShowPartialHighlight != settings.showPartialHighlight ||
-        localAutoShowOverlay != settings.autoShowOverlay
+        localAutoShowOverlay != settings.autoShowOverlay ||
+        localAppleSpeechMode != settings.appleSpeechMode ||
+        localBackgroundOpacity != settings.backgroundOpacity ||
+        localIsClickThroughEnabled != settings.isClickThroughEnabled ||
+        localAIProvider != settings.aiProviderRaw ||
+        localOllamaBaseURL != settings.ollamaBaseURL ||
+        localSelectedOllamaModel != settings.selectedOllamaModel ||
+        localTranslationEnabled != settings.translationEnabled ||
+        localTargetLanguage != settings.targetLanguage
     }
     
     private func applySettingsAndDismiss() {
@@ -692,6 +785,18 @@ struct LyricModeSettingsPopup: View {
         settings.fontSize = localFontSize
         settings.showPartialHighlight = localShowPartialHighlight
         settings.autoShowOverlay = localAutoShowOverlay
+        settings.appleSpeechMode = localAppleSpeechMode
+        settings.backgroundOpacity = localBackgroundOpacity
+        settings.isClickThroughEnabled = localIsClickThroughEnabled
+        
+        // AI Provider settings
+        settings.aiProviderRaw = localAIProvider
+        settings.ollamaBaseURL = localOllamaBaseURL
+        settings.selectedOllamaModel = localSelectedOllamaModel
+        
+        // Translation settings
+        settings.translationEnabled = localTranslationEnabled
+        settings.targetLanguage = localTargetLanguage
         
         // Notify about changes that need recording restart
         onSettingsApplied?(audioDeviceChanged, engineChanged)
@@ -841,7 +946,7 @@ struct LyricModeSettingsPopup: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 
-                Picker("Mode", selection: $settings.appleSpeechMode) {
+                Picker("Mode", selection: $localAppleSpeechMode) {
                     ForEach(LyricModeSettings.AppleSpeechMode.allCases) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
@@ -849,7 +954,7 @@ struct LyricModeSettingsPopup: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 
-                Text(settings.appleSpeechMode.description)
+                Text(localAppleSpeechMode.description)
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
@@ -913,12 +1018,12 @@ struct LyricModeSettingsPopup: View {
                     
                     Spacer()
                     
-                    Text("\(Int(settings.backgroundOpacity * 100))%")
+                    Text("\(Int(localBackgroundOpacity * 100))%")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
                 
-                Slider(value: $settings.backgroundOpacity, in: 0.3...1.0, step: 0.1)
+                Slider(value: $localBackgroundOpacity, in: 0.3...1.0, step: 0.1)
             }
         }
     }
@@ -934,7 +1039,161 @@ struct LyricModeSettingsPopup: View {
             
             Toggle("Show partial results highlight", isOn: $localShowPartialHighlight)
             
-            Toggle("Click-through overlay", isOn: $settings.isClickThroughEnabled)
+            Toggle("Click-through overlay", isOn: $localIsClickThroughEnabled)
+        }
+    }
+    
+    // MARK: - AI Provider Integration
+    
+    private var aiProviderSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("AI Provider Integration")
+                .font(.headline)
+            
+            // Provider Picker
+            HStack {
+                Picker("Provider", selection: $localAIProvider) {
+                    Text("Ollama").tag("ollama")
+                }
+                .pickerStyle(.automatic)
+                
+                Spacer()
+                
+                // Connection status
+                if isCheckingOllama {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if !ollamaModels.isEmpty {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 8, height: 8)
+                    Text("Connected")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                } else {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
+                    Text("Disconnected")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Divider()
+            
+            // Ollama Server URL
+            if isEditingOllamaURL {
+                HStack {
+                    TextField("Base URL", text: $localOllamaBaseURL)
+                        .textFieldStyle(.roundedBorder)
+                    
+                    Button("Save") {
+                        settings.ollamaBaseURL = localOllamaBaseURL
+                        checkOllamaConnection()
+                        isEditingOllamaURL = false
+                    }
+                }
+            } else {
+                HStack {
+                    Text("Server: \(localOllamaBaseURL)")
+                        .font(.subheadline)
+                    Spacer()
+                    Button("Edit") { isEditingOllamaURL = true }
+                    Button(action: {
+                        localOllamaBaseURL = "http://localhost:11434"
+                        settings.ollamaBaseURL = localOllamaBaseURL
+                        checkOllamaConnection()
+                    }) {
+                        Image(systemName: "arrow.counterclockwise")
+                    }
+                    .help("Reset to default")
+                }
+            }
+            
+            // Model Picker
+            if !ollamaModels.isEmpty {
+                Divider()
+                
+                Picker("Model", selection: $localSelectedOllamaModel) {
+                    ForEach(ollamaModels) { model in
+                        Text(model.name).tag(model.name)
+                    }
+                }
+            }
+            
+            Divider()
+            
+            // Translation Settings
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Enable Translation", isOn: $localTranslationEnabled)
+                
+                if localTranslationEnabled {
+                    HStack {
+                        Text("Target Language")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        Spacer()
+                        
+                        Picker("Language", selection: $localTargetLanguage) {
+                            Text("Vietnamese").tag("Vietnamese")
+                            Text("Japanese").tag("Japanese")
+                            Text("Korean").tag("Korean")
+                            Text("Chinese").tag("Chinese")
+                            Text("Spanish").tag("Spanish")
+                            Text("French").tag("French")
+                            Text("German").tag("German")
+                            Text("Portuguese").tag("Portuguese")
+                            Text("Russian").tag("Russian")
+                            Text("English").tag("English")
+                        }
+                        .labelsHidden()
+                    }
+                    
+                    Text("Each paragraph will be translated using the selected AI model")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .onAppear {
+            checkOllamaConnection()
+        }
+    }
+    
+    private func checkOllamaConnection() {
+        isCheckingOllama = true
+        
+        Task {
+            do {
+                let url = URL(string: "\(localOllamaBaseURL)/api/tags")!
+                let (data, _) = try await URLSession.shared.data(from: url)
+                
+                struct OllamaTagsResponse: Codable {
+                    let models: [OllamaService.OllamaModel]
+                }
+                
+                let response = try JSONDecoder().decode(OllamaTagsResponse.self, from: data)
+                await MainActor.run {
+                    ollamaModels = response.models
+                    isCheckingOllama = false
+                    
+                    // Select first model if current selection is not available
+                    // Also update settings to keep hasChanges accurate
+                    if !ollamaModels.contains(where: { $0.name == localSelectedOllamaModel }) {
+                        if let first = ollamaModels.first {
+                            localSelectedOllamaModel = first.name
+                            settings.selectedOllamaModel = first.name
+                        }
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    ollamaModels = []
+                    isCheckingOllama = false
+                }
+            }
         }
     }
 }
