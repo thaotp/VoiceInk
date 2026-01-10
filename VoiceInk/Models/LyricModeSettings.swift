@@ -38,6 +38,7 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.isClickThroughEnabled") var isClickThroughEnabled: Bool = false
     @AppStorage("lyricMode.backgroundOpacity") var backgroundOpacity: Double = 0.8
     @AppStorage("lyricMode.showPartialHighlight") var showPartialHighlight: Bool = true
+    @AppStorage("lyricMode.autoShowOverlay") var autoShowOverlay: Bool = true
     
     // Transcription engine type
     @AppStorage("lyricMode.engineType") var engineTypeRaw: String = LyricModeEngineType.whisper.rawValue

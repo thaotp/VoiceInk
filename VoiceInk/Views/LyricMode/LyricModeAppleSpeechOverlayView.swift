@@ -142,7 +142,8 @@ struct LyricModeAppleSpeechOverlayView: View {
     // MARK: - Header
     
     private var headerView: some View {
-        HStack {
+        HStack(spacing: 12) {
+            // Engine label
             HStack(spacing: 6) {
                 Image(systemName: "apple.logo")
                     .font(.system(size: 10))
@@ -152,6 +153,36 @@ struct LyricModeAppleSpeechOverlayView: View {
             .foregroundColor(.white.opacity(0.6))
             
             Spacer()
+            
+            // Control buttons
+            HStack(spacing: 8) {
+                // Hide overlay button
+                Button(action: hideOverlay) {
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                .help("Hide Overlay")
+                
+                // Show main app button
+                Button(action: showMainApp) {
+                    Image(systemName: "macwindow")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                .help("Show Main Window")
+                
+                // Clear and reset button (same as checkmark)
+                Button(action: clearAndReset) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                .help("Clear and Reset")
+            }
             
             // Status indicator
             HStack(spacing: 4) {
@@ -166,6 +197,22 @@ struct LyricModeAppleSpeechOverlayView: View {
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 4)
+    }
+    
+    // MARK: - Actions
+    
+    private func hideOverlay() {
+        NotificationCenter.default.post(name: .hideLyricModeOverlay, object: nil)
+    }
+    
+    private func showMainApp() {
+        // Post notification to show main Lyric Mode window
+        NotificationCenter.default.post(name: .lyricModeShowMainWindow, object: nil)
+    }
+    
+    private func clearAndReset() {
+        // Same behavior as checkmark button in main view
+        NotificationCenter.default.post(name: .lyricModeClearAndReset, object: nil)
     }
     
     // MARK: - Transcription Content

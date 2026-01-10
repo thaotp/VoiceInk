@@ -302,14 +302,14 @@ final class LyricModeWindowManager: ObservableObject {
     private func setupNotifications() {
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(handleHideNotification),
+            selector: #selector(handleHideOverlayNotification),
             name: NSNotification.Name("HideLyricModeOverlay"),
             object: nil
         )
     }
     
-    @objc private func handleHideNotification() {
-        hide()
+    @objc private func handleHideOverlayNotification() {
+        hideOverlay()
     }
     
     private func configureAudioDevice() {
@@ -381,4 +381,7 @@ extension Notification.Name {
     static let showLyricModeOverlay = Notification.Name("ShowLyricModeOverlay")
     static let hideLyricModeOverlay = Notification.Name("HideLyricModeOverlay")
     static let toggleLyricModeOverlay = Notification.Name("ToggleLyricModeOverlay")
+    static let lyricModeStopRecording = Notification.Name("LyricModeStopRecording")
+    static let lyricModeShowMainWindow = Notification.Name("LyricModeShowMainWindow")
+    static let lyricModeClearAndReset = Notification.Name("LyricModeClearAndReset")
 }

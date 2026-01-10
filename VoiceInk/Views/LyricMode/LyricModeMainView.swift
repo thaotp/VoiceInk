@@ -45,6 +45,19 @@ struct LyricModeMainView: View {
                 stopTimer()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .lyricModeStopRecording)) { _ in
+            stopRecording()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .lyricModeShowMainWindow)) { _ in
+            // Bring the main window to front
+            if let window = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: { !($0 is NSPanel) }) {
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .lyricModeClearAndReset)) { _ in
+            clearAndReset()
+        }
     }
     
     // MARK: - Header
@@ -358,9 +371,16 @@ struct LyricModeMainView: View {
                     try await lyricModeManager.startRecording(with: whisperState)
                     subscribeToTranscription()
                     
-                    // Show overlay if enabled
-                    if lyricModeManager.isOverlayVisible == false {
-                        lyricModeManager.showOverlay()
+                    // Show or hide overlay based on auto-show setting
+                    if settings.autoShowOverlay {
+                        if !lyricModeManager.isOverlayVisible {
+                            lyricModeManager.showOverlay()
+                        }
+                    } else {
+                        // Hide overlay if auto-show is disabled
+                        if lyricModeManager.isOverlayVisible {
+                            lyricModeManager.hideOverlay()
+                        }
                     }
                 } catch {
                     print("Failed to start recording: \(error)")
@@ -691,6 +711,8 @@ struct LyricModeSettingsPopup: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Behavior")
                 .font(.headline)
+            
+            Toggle("Auto-show overlay on recording", isOn: $settings.autoShowOverlay)
             
             Toggle("Show partial results highlight", isOn: $settings.showPartialHighlight)
             
