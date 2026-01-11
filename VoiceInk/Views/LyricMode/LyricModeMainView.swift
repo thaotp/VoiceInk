@@ -10,7 +10,11 @@ struct LyricModeMainView: View {
     @ObservedObject var whisperState: WhisperState
     
     @State private var showingSettings = false
-    @State private var showSavedToast = false
+    // Generic Toast State
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastIcon = ""
+    @State private var toastColor: Color = .green
     @State private var translatedText: String = ""
     @State private var timer: Timer?
     @State private var cancellables = Set<AnyCancellable>()
@@ -80,11 +84,12 @@ struct LyricModeMainView: View {
             )
         }
         .overlay(alignment: .bottom) {
-            if showSavedToast {
+
+            if showToast {
                 HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                    Text("Session Saved")
+                    Image(systemName: toastIcon)
+                        .foregroundColor(toastColor)
+                    Text(toastMessage)
                         .font(.subheadline)
                         .fontWeight(.medium)
                 }
@@ -98,7 +103,7 @@ struct LyricModeMainView: View {
                 .onAppear {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         withAnimation {
-                            showSavedToast = false
+                            showToast = false
                         }
                     }
                 }
@@ -431,48 +436,66 @@ struct LyricModeMainView: View {
     // MARK: - Controls Section
     
     private var controlsSection: some View {
-        HStack(spacing: 24) {
-            // Timer (compact)
-            Text(formattedDuration)
-                .font(.system(size: 16, weight: .medium, design: .monospaced))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-            
-            Spacer()
-            
-            // Record/Pause/Resume button
-            Button(action: toggleRecordingOrPause) {
-                Circle()
-                    .fill(recordButtonColor)
-                    .frame(width: 48, height: 48)
-                    .overlay {
-                        recordButtonOverlay
-                    }
-                    .shadow(color: recordButtonColor.opacity(0.3), radius: lyricModeManager.isRecording ? 6 : 3)
+        ZStack {
+            // Timer (align to leading)
+            HStack {
+                Text(formattedDuration)
+                    .font(.system(size: 16, weight: .medium, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                Spacer()
             }
-            .buttonStyle(.plain)
-            .help(recordButtonHelp)
+            .padding(.horizontal, 20)
             
-            Spacer()
-            
-            // Clear/Reset button (always visible, clears and resets)
-            Button(action: clearAndReset) {
-                Circle()
-                    .stroke(Color.secondary.opacity(0.5), lineWidth: 1.5)
-                    .frame(width: 36, height: 36)
-                    .overlay {
-                        Image(systemName: "checkmark")
-                            .font(.body)
-                            .foregroundColor(.secondary)
-                    }
+            // Buttons (centered)
+            HStack(spacing: 32) {
+                // Discard Button (X Mark)
+                Button(action: discardAndQuit) {
+                    Circle()
+                        .stroke(Color.secondary.opacity(0.5), lineWidth: 1.5)
+                        .frame(width: 36, height: 36)
+                        .overlay {
+                            Image(systemName: "xmark")
+                                .font(.body)
+                                .foregroundColor(.secondary)
+                        }
+                }
+                .buttonStyle(.plain)
+                .disabled(transcriptSegments.isEmpty && !lyricModeManager.isRecording)
+                .opacity(transcriptSegments.isEmpty && !lyricModeManager.isRecording ? 0.3 : 1)
+                .help("Discard and Quit (Do not save)")
+                
+                // Record/Pause/Resume button
+                Button(action: toggleRecordingOrPause) {
+                    Circle()
+                        .fill(recordButtonColor)
+                        .frame(width: 48, height: 48)
+                        .overlay {
+                            recordButtonOverlay
+                        }
+                        .shadow(color: recordButtonColor.opacity(0.3), radius: lyricModeManager.isRecording ? 6 : 3)
+                }
+                .buttonStyle(.plain)
+                .help(recordButtonHelp)
+                
+                // Clear/Reset button (Checkmark)
+                Button(action: clearAndReset) {
+                    Circle()
+                        .stroke(Color.secondary.opacity(0.5), lineWidth: 1.5)
+                        .frame(width: 36, height: 36)
+                        .overlay {
+                            Image(systemName: "checkmark")
+                                .font(.body)
+                                .foregroundColor(.secondary)
+                        }
+                }
+                .buttonStyle(.plain)
+                .disabled(transcriptSegments.isEmpty && !lyricModeManager.isRecording)
+                .opacity(transcriptSegments.isEmpty && !lyricModeManager.isRecording ? 0.3 : 1)
+                .help("Clear and Reset")
             }
-            .buttonStyle(.plain)
-            .disabled(transcriptSegments.isEmpty && !lyricModeManager.isRecording)
-            .opacity(transcriptSegments.isEmpty && !lyricModeManager.isRecording ? 0.3 : 1)
-            .help("Clear and Reset")
         }
-        .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .animation(.easeInOut(duration: 0.2), value: lyricModeManager.isRecording)
         .animation(.easeInOut(duration: 0.2), value: isPaused)
@@ -606,8 +629,11 @@ struct LyricModeMainView: View {
             print("Session saved to SwiftData: \(session.title)")
             
             // Show toast
+            toastMessage = "Session Saved"
+            toastIcon = "checkmark.circle.fill"
+            toastColor = .green
             withAnimation {
-                showSavedToast = true
+                showToast = true
             }
         }
     }
@@ -636,12 +662,29 @@ struct LyricModeMainView: View {
         saveCurrentSession()
         
         // Stop recording if active, clear content, return to initial state
+        resetState()
+    }
+    
+    private func discardAndQuit() {
+        // Just reset without saving
+        resetState()
+        
+        // Show Discard Toast
+        toastMessage = "Session Discarded"
+        toastIcon = "trash.fill"
+        toastColor = .red
+        withAnimation {
+            showToast = true
+        }
+    }
+    
+    private func resetState() {
         if lyricModeManager.isRecording || isPaused {
             lyricModeManager.stopRecording()
         }
         transcriptSegments = []
         translatedSegments = []
-        translationService.clearHistory() // Clear AI context
+        translationService.clearHistory()
         partialText = ""
         recordingDuration = 0
         isPaused = false
