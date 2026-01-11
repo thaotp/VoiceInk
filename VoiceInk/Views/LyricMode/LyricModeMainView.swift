@@ -14,6 +14,7 @@ struct LyricModeMainView: View {
     @State private var isPaused = false
     @State private var isTranslateEnabled = false
     @State private var shouldAutoScroll = true
+    @State private var isProgrammaticScroll = false
     @State private var translatedSegments: [String] = []
     
     private let translationService = LyricModeTranslationService()
@@ -241,63 +242,111 @@ struct LyricModeMainView: View {
     
     private var speechContentView: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    if transcriptSegments.isEmpty && partialText.isEmpty && !lyricModeManager.isRecording {
-                        emptyState
-                    } else {
-                        // Display each transcript segment as a paragraph
-                        ForEach(Array(transcriptSegments.enumerated()), id: \.offset) { index, segment in
-                            VStack(alignment: .leading, spacing: 4) {
-                                TranscriptParagraphView(
-                                    text: segment,
-                                    fontSize: settings.fontSize,
-                                    isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty
-                                )
-                                
-                                // Show translation if enabled and available
-                                if settings.translationEnabled && index < translatedSegments.count && !translatedSegments[index].isEmpty {
-                                    Text(translatedSegments[index])
-                                        .font(.system(size: settings.fontSize * 0.85))
-                                        .foregroundColor(.secondary)
-                                        .padding(.horizontal, 31) // Align with paragraph text (16 + 15 for indicator bar)
-                                        .padding(.bottom, 4)
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        if transcriptSegments.isEmpty && partialText.isEmpty && !lyricModeManager.isRecording {
+                            emptyState
+                        } else {
+                            // Display each transcript segment as a paragraph
+                            ForEach(Array(transcriptSegments.enumerated()), id: \.offset) { index, segment in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    TranscriptParagraphView(
+                                        text: segment,
+                                        fontSize: settings.fontSize,
+                                        isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty
+                                    )
+                                    
+                                    // Show translation if enabled and available
+                                    if settings.translationEnabled && index < translatedSegments.count && !translatedSegments[index].isEmpty {
+                                        Text(translatedSegments[index])
+                                            .font(.system(size: settings.fontSize * 0.85))
+                                            .foregroundColor(.secondary)
+                                            .padding(.horizontal, 31) // Align with paragraph text (16 + 15 for indicator bar)
+                                            .padding(.bottom, 4)
+                                    }
                                 }
                             }
+                            
+                            // Partial (in-progress) text
+                            if !partialText.isEmpty {
+                                Text(partialText)
+                                    .font(.system(size: settings.fontSize))
+                                    .foregroundColor(.cyan)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .id("partial")
+                            }
+                            
+                            // Scroll anchor
+                            Color.clear
+                                .frame(height: 1)
+                                .id("bottom")
+                                .onAppear {
+                                    // If bottom appears, user is at bottom -> enable auto-scroll
+                                    shouldAutoScroll = true
+                                    isProgrammaticScroll = false
+                                }
+                                .onDisappear {
+                                    // If bottom disappears AND we didn't just cause it by auto-scrolling,
+                                    // then user scrolled up -> disable auto-scroll
+                                    if !isProgrammaticScroll {
+                                        shouldAutoScroll = false
+                                    }
+                                }
                         }
-                        
-                        // Partial (in-progress) text
-                        if !partialText.isEmpty {
-                            Text(partialText)
-                                .font(.system(size: settings.fontSize))
-                                .foregroundColor(.cyan)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .id("partial")
+                    }
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, minHeight: 200)
+                }
+                .onChange(of: transcriptSegments.count) { _, _ in
+                    if shouldAutoScroll {
+                        isProgrammaticScroll = true
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
                         }
-                        
-                        // Scroll anchor
-                        Color.clear
-                            .frame(height: 1)
-                            .id("bottom")
+                        // Reset flag after animation
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            isProgrammaticScroll = false
+                        }
                     }
                 }
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, minHeight: 200)
-            }
-            .onChange(of: transcriptSegments.count) { _, _ in
-                if shouldAutoScroll {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo("bottom", anchor: .bottom)
+                .onChange(of: partialText) { _, _ in
+                    if shouldAutoScroll {
+                        isProgrammaticScroll = true
+                        withAnimation(.easeOut(duration: 0.1)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                        // Reset flag after animation
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            isProgrammaticScroll = false
+                        }
                     }
                 }
-            }
-            .onChange(of: partialText) { _, _ in
-                if shouldAutoScroll {
-                    withAnimation(.easeOut(duration: 0.1)) {
-                        proxy.scrollTo("partial", anchor: .bottom)
+                
+                // Resume Auto-Scroll Button
+                if !shouldAutoScroll && (!transcriptSegments.isEmpty || !partialText.isEmpty) {
+                    Button(action: {
+                        shouldAutoScroll = true
+                        isProgrammaticScroll = true
+                        withAnimation {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                        // Reset flag after animation
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            isProgrammaticScroll = false
+                        }
+                    }) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 32))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.blue)
+                            .shadow(radius: 2, y: 1)
+                            .padding(16)
                     }
+                    .buttonStyle(.plain)
+                    .transition(.opacity.combined(with: .scale))
                 }
             }
         }

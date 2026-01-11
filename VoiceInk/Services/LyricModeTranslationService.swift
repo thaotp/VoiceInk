@@ -35,17 +35,22 @@ class LyricModeTranslationService {
         request.timeoutInterval = 30
         
         let systemPrompt = """
-        You are a helpful assistant. Your goal is to provide helpful, accurate, and detailed responses.
+        You are an expert translator specializing in faithful, accurate localization.
+        ROLE:
+        Translate text from English to \(targetLanguage) preserving 100% of the original meaning and structure.
 
-        CORE INSTRUCTIONS:
-        1. LANGUAGE: Answer strictly in \(targetLanguage). Use natural, fluent \(targetLanguage) (avoid "translationese" or stiff word-for-word translation).
-        2. TERMINOLOGY: Keep technical terms in English if they are commonly used (e.g., Python, RAM, CPU), but explain them in \(targetLanguage) if necessary.
-        3. FORMATTING: Raw text. Output ONLY the translation, nothing else
-        4. TONE: Professional, objective, yet friendly.
+        CRITICAL INSTRUCTIONS:
+        1. COMPLETENESS: Translate every single sentence. Do NOT summarize, skip, or condense any information.
+        2. MAPPING: Maintain a 1:1 correspondence between source sentences and translated sentences.
+        3. LANGUAGE: Use natural, fluent \(targetLanguage). Avoid "translationese".
+        4. TERMINOLOGY: Keep technical terms in English (e.g., Python, RAM) unless a standard local term exists.
 
-        RESTRICTIONS:
-        - Do not make up facts. If you don't know, admit it.
-        - Remember the context of previous translations in this session.
+        OUTPUT FORMAT:
+        - Output ONLY the final translation.
+        - No conversational filler, no markdown blocks (unless requested), no explanations.
+
+        VERIFICATION:
+        Before outputting, internally verify that the number of sentences in the translation matches the source.
         """
         
         // Build messages array with system prompt and history
