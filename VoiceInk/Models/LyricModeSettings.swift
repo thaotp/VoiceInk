@@ -71,7 +71,7 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.selectedOpenAIModel") var selectedOpenAIModel: String = "gpt-4o-mini"
     
     // Translation settings
-    @AppStorage("lyricMode.translationEnabled") var translationEnabled: Bool = false
+    @AppStorage("lyricMode.translationEnabled") var translationEnabled: Bool = true
     @AppStorage("lyricMode.targetLanguage") var targetLanguage: String = "Vietnamese"
     
     // Sentence continuity setting

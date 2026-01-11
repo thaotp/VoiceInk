@@ -1,18 +1,21 @@
 import SwiftUI
+import SwiftData
 import Combine
 
 /// Main view for Lyric Mode with Notes-style inline transcription
 struct LyricModeMainView: View {
+    @Environment(\.modelContext) private var modelContext
     @ObservedObject var settings: LyricModeSettings
     @ObservedObject var lyricModeManager: LyricModeWindowManager
     @ObservedObject var whisperState: WhisperState
     
     @State private var showingSettings = false
+    @State private var showSavedToast = false
     @State private var translatedText: String = ""
     @State private var timer: Timer?
     @State private var cancellables = Set<AnyCancellable>()
     @State private var isPaused = false
-    @State private var isTranslateEnabled = false
+
     @State private var shouldAutoScroll = true
     @State private var isProgrammaticScroll = false
     @State private var translatedSegments: [String] = []
@@ -76,6 +79,31 @@ struct LyricModeMainView: View {
                 }
             )
         }
+        .overlay(alignment: .bottom) {
+            if showSavedToast {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text("Session Saved")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.regularMaterial)
+                .cornerRadius(20)
+                .shadow(radius: 4)
+                .padding(.bottom, 80) // Above control bar
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        withAnimation {
+                            showSavedToast = false
+                        }
+                    }
+                }
+            }
+        }
         .onChange(of: lyricModeManager.isRecording) { _, isRecording in
             if isRecording {
                 startTimer()
@@ -128,13 +156,13 @@ struct LyricModeMainView: View {
             Spacer()
             
             // Translate toggle
-            Button(action: { isTranslateEnabled.toggle() }) {
-                Image(systemName: isTranslateEnabled ? "character.book.closed.fill" : "character.book.closed")
+            Button(action: { settings.translationEnabled.toggle() }) {
+                Image(systemName: settings.translationEnabled ? "character.book.closed.fill" : "character.book.closed")
                     .font(.title3)
-                    .foregroundColor(isTranslateEnabled ? .blue : .secondary)
+                    .foregroundColor(settings.translationEnabled ? .blue : .secondary)
             }
             .buttonStyle(.plain)
-            .help(isTranslateEnabled ? "Hide Translation" : "Show Translation")
+            .help(settings.translationEnabled ? "Hide Translation" : "Show Translation")
             
             // Overlay toggle
             Button(action: { lyricModeManager.toggleOverlay() }) {
@@ -144,6 +172,17 @@ struct LyricModeMainView: View {
             }
             .buttonStyle(.plain)
             .help(lyricModeManager.isOverlayVisible ? "Hide Overlay" : "Show Overlay")
+            
+            // History button
+            Button(action: {
+                LyricHistoryWindowController.shared.showHistoryWindow(modelContext: modelContext)
+            }) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("History")
             
             // Settings button
             Button(action: { showingSettings = true }) {
@@ -219,25 +258,10 @@ struct LyricModeMainView: View {
     // MARK: - Transcription Area
     
     private var transcriptionArea: some View {
-        Group {
-            if isTranslateEnabled {
-                // Split view: Speech | Translation
-                HSplitView {
-                    // Left: Speech output
-                    speechContentView
-                        .frame(minWidth: 200)
-                    
-                    // Right: Translation
-                    translationContentView
-                        .frame(minWidth: 200)
-                }
-            } else {
-                // Single view: Speech only
-                speechContentView
-            }
-        }
-        .frame(maxHeight: .infinity)
-        .animation(.easeInOut(duration: 0.3), value: isTranslateEnabled)
+        // Single view with inline translation support
+        speechContentView
+            .frame(maxHeight: .infinity)
+            .animation(.easeInOut(duration: 0.3), value: settings.translationEnabled)
     }
     
     private var speechContentView: some View {
@@ -554,11 +578,38 @@ struct LyricModeMainView: View {
     }
     
     private func stopRecording() {
-        // Finalize any partial text before stopping
-        finalizePartialText()
-        // Permanently stop and save
+        saveCurrentSession()
+        
+        // Permanently stop
         isPaused = false
         lyricModeManager.stopRecording()
+    }
+    
+    private func saveCurrentSession() {
+        // Finalize any partial text before saving
+        finalizePartialText()
+        
+        // Save Session if there's content
+        if !transcriptSegments.isEmpty {
+            let session = LyricSession(
+                id: UUID(),
+                timestamp: Date(),
+                duration: lyricModeManager.recordingDuration,
+                transcriptSegments: transcriptSegments,
+                translatedSegments: translatedSegments,
+                audioFilePath: nil, // Future: Add audio file path
+                targetLanguage: settings.targetLanguage,
+                title: Date().formatted(date: .numeric, time: .shortened)
+            )
+            
+            modelContext.insert(session)
+            print("Session saved to SwiftData: \(session.title)")
+            
+            // Show toast
+            withAnimation {
+                showSavedToast = true
+            }
+        }
     }
     
     /// Finalize partial text as an unfinished paragraph marked with asterisk
@@ -581,6 +632,9 @@ struct LyricModeMainView: View {
     }
     
     private func clearAndReset() {
+        // Save current session before clearing
+        saveCurrentSession()
+        
         // Stop recording if active, clear content, return to initial state
         if lyricModeManager.isRecording || isPaused {
             lyricModeManager.stopRecording()
