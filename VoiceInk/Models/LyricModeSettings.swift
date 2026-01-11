@@ -74,6 +74,9 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.translationEnabled") var translationEnabled: Bool = false
     @AppStorage("lyricMode.targetLanguage") var targetLanguage: String = "Vietnamese"
     
+    // Sentence continuity setting
+    @AppStorage("lyricMode.sentenceContinuityEnabled") var sentenceContinuityEnabled: Bool = true
+    
     // Apple Speech specific settings
     @AppStorage("lyricMode.appleSpeechMode") var appleSpeechModeRaw: String = AppleSpeechMode.standard.rawValue
     

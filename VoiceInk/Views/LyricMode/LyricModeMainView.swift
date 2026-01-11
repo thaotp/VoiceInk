@@ -474,7 +474,8 @@ struct LyricModeMainView: View {
                 lyricModeManager.resumeRecording()
                 startTimer()
             } else if lyricModeManager.isRecording {
-                // Pause recording
+                // Pause recording - finalize any partial text
+                finalizePartialText()
                 isPaused = true
                 lyricModeManager.pauseRecording()
                 stopTimer()
@@ -504,9 +505,26 @@ struct LyricModeMainView: View {
     }
     
     private func stopRecording() {
+        // Finalize any partial text before stopping
+        finalizePartialText()
         // Permanently stop and save
         isPaused = false
         lyricModeManager.stopRecording()
+    }
+    
+    /// Finalize partial text as an unfinished paragraph marked with asterisk
+    private func finalizePartialText() {
+        let partial = partialText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !partial.isEmpty {
+            // Mark as unfinished with asterisk
+            let unfinishedText = partial + " *"
+            transcriptSegments.append(unfinishedText)
+            syncTranslatedSegmentsCount()
+            translateSegment(at: transcriptSegments.count - 1, text: partial)
+        }
+        // Reset partial text storage
+        partialText = ""
+        lyricModeManager.partialText = ""
     }
     
     private func toggleOverlay() {
@@ -596,8 +614,8 @@ struct LyricModeMainView: View {
             }
         }
         
-        // Handle sentence continuity - merge incomplete sentences
-        if let lastIndex = transcriptSegments.indices.last {
+        // Handle sentence continuity - merge incomplete sentences (if enabled)
+        if settings.sentenceContinuityEnabled, let lastIndex = transcriptSegments.indices.last {
             let previousSegment = transcriptSegments[lastIndex]
             
             if let (complete, incomplete) = TranscriptTextProcessor.extractIncompleteSentence(from: previousSegment) {
@@ -691,6 +709,9 @@ struct LyricModeSettingsPopup: View {
     @State private var localTranslationEnabled: Bool = false
     @State private var localTargetLanguage: String = "Vietnamese"
     
+    // Sentence continuity state
+    @State private var localSentenceContinuityEnabled: Bool = true
+    
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -748,6 +769,9 @@ struct LyricModeSettingsPopup: View {
             // Translation
             localTranslationEnabled = settings.translationEnabled
             localTargetLanguage = settings.targetLanguage
+            
+            // Sentence continuity
+            localSentenceContinuityEnabled = settings.sentenceContinuityEnabled
         }
     }
     
@@ -767,7 +791,8 @@ struct LyricModeSettingsPopup: View {
         localOllamaBaseURL != settings.ollamaBaseURL ||
         localSelectedOllamaModel != settings.selectedOllamaModel ||
         localTranslationEnabled != settings.translationEnabled ||
-        localTargetLanguage != settings.targetLanguage
+        localTargetLanguage != settings.targetLanguage ||
+        localSentenceContinuityEnabled != settings.sentenceContinuityEnabled
     }
     
     private func applySettingsAndDismiss() {
@@ -797,6 +822,9 @@ struct LyricModeSettingsPopup: View {
         // Translation settings
         settings.translationEnabled = localTranslationEnabled
         settings.targetLanguage = localTargetLanguage
+        
+        // Sentence continuity setting
+        settings.sentenceContinuityEnabled = localSentenceContinuityEnabled
         
         // Notify about changes that need recording restart
         onSettingsApplied?(audioDeviceChanged, engineChanged)
@@ -1040,6 +1068,9 @@ struct LyricModeSettingsPopup: View {
             Toggle("Show partial results highlight", isOn: $localShowPartialHighlight)
             
             Toggle("Click-through overlay", isOn: $localIsClickThroughEnabled)
+            
+            Toggle("Merge incomplete sentences across paragraphs", isOn: $localSentenceContinuityEnabled)
+                .help("When enabled, sentences without proper ending punctuation (。！？) are merged with the next paragraph")
         }
     }
     
