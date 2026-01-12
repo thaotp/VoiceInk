@@ -558,6 +558,15 @@ struct LyricModeSettingsView: View {
                         .foregroundColor(.secondary)
                 }
             }
+            
+            Toggle(isOn: $settings.translateImmediately) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Translate Immediately (Live Feel)")
+                    Text("Analyze partial text and translate complete sentences instantly")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
     }
     

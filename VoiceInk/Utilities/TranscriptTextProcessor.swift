@@ -19,7 +19,7 @@ enum TranscriptTextProcessor {
     static let maxOverlapSearchLength = 200
     
     /// Minimum overlap length to consider (avoid false positives)
-    static let minOverlapSearchLength = 10
+    static let minOverlapSearchLength = 3
     
     // MARK: - Overlap Detection
     
@@ -75,6 +75,21 @@ enum TranscriptTextProcessor {
     /// - Returns: True if new text starts with existing text
     static func isCumulativeUpdate(_ newText: String, of existingText: String) -> Bool {
         return newText.hasPrefix(existingText) && newText != existingText
+    }
+    
+    /// Check if new text is a "replacement" (correction/extension) of existing text
+    /// This handles cases where the engine corrects a word or adds punctuation
+    static func isReplacementOf(_ newText: String, existingText: String) -> Bool {
+        // If entirely different, not a replacement
+        if newText.isEmpty || existingText.isEmpty { return false }
+        
+        // If new text contains the existing text (fuzzy match could be better but strict containment is safe start)
+        // We normalize simply by removing punctuation/spaces for the check
+        let normalizedNew = newText.filter { !$0.isWhitespace && !$0.isPunctuation }
+        let normalizedExisting = existingText.filter { !$0.isWhitespace && !$0.isPunctuation }
+        
+        // If the core content is a prefix, it's a replacement/extension
+        return normalizedNew.hasPrefix(normalizedExisting)
     }
     
     // MARK: - Sentence Continuity

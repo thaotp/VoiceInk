@@ -72,6 +72,7 @@ class LyricModeSettings: ObservableObject {
     
     // Translation settings
     @AppStorage("lyricMode.translationEnabled") var translationEnabled: Bool = true
+    @AppStorage("lyricMode.translateImmediately") var translateImmediately: Bool = false
     @AppStorage("lyricMode.targetLanguage") var targetLanguage: String = "Vietnamese"
     
     // Sentence continuity setting

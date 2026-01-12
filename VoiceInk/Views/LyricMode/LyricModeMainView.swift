@@ -724,12 +724,67 @@ struct LyricModeMainView: View {
             }
             .store(in: &cancellables)
         
+
+        
         lyricModeManager.partialTranscriptionPublisher
             .receive(on: DispatchQueue.main)
-            .sink { text in
-                partialText = text
+            .sink { [self] text in
+                if settings.translateImmediately {
+                   processLiveTranslation(from: text)
+                }
+                
+                // Update partial text display, filtering out already confirmed segments
+                let allConfirmed = transcriptSegments.joined(separator: " ")
+                if let uniquePartial = TranscriptTextProcessor.removeOverlap(from: text, existingText: allConfirmed) {
+                    partialText = uniquePartial
+                } else {
+                    partialText = "" // Fully overlapped/confirmed
+                }
             }
             .store(in: &cancellables)
+    }
+    
+    private func processLiveTranslation(from text: String) {
+        // Extract complete sentences from the partial text
+        let sentences = extractSentences(from: text)
+        for sentence in sentences {
+            // Check if this sentence is already at the end of our transcript
+            if let lastSegment = transcriptSegments.last {
+                // If the last segment ends with this sentence, skip it
+                if lastSegment.hasSuffix(sentence) {
+                    continue
+                }
+                // If this sentence starts with the last segment main content (overlap), skip
+                if sentence.hasPrefix(lastSegment) {
+                    continue
+                }
+            }
+            // Double check duplicate with text processor helper
+            let allConfirmed = transcriptSegments.joined(separator: " ")
+            if TranscriptTextProcessor.isDuplicate(sentence, of: allConfirmed) {
+                continue
+            }
+            
+            processNewTranscriptSegment(sentence)
+        }
+    }
+    
+    private func extractSentences(from text: String) -> [String] {
+        var sentences: [String] = []
+        let punctuation = TranscriptTextProcessor.sentenceEndingPunctuation
+        
+        var currentSentence = ""
+        for char in text {
+            currentSentence.append(char)
+            if punctuation.contains(String(char)) {
+                let trimmed = currentSentence.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    sentences.append(trimmed)
+                }
+                currentSentence = ""
+            }
+        }
+        return sentences
     }
     
     /// Process a new transcript segment with overlap detection and sentence continuity
@@ -737,7 +792,27 @@ struct LyricModeMainView: View {
         var trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return }
         
-        // Remove overlap with existing content
+        // 1. Check if this is a replacement/correction of the LAST segment
+        // This handles the case where "Live Translate" added a tentative segment (e.g. "Hello world")
+        // but now the engine sends the final corrected version (e.g. "Hello, world!")
+        if let lastSegment = transcriptSegments.last, let lastIndex = transcriptSegments.indices.last {
+            // First check for simple cumulative update (exact prefix match)
+            if TranscriptTextProcessor.isCumulativeUpdate(trimmedText, of: lastSegment) {
+                transcriptSegments[lastIndex] = trimmedText
+                translateSegment(at: lastIndex, text: trimmedText)
+                return
+            }
+            
+            // Then check for "fuzzy" replacement (normalized content match)
+            if TranscriptTextProcessor.isReplacementOf(trimmedText, existingText: lastSegment) {
+                 // It's a correction! Replace the last segment.
+                 transcriptSegments[lastIndex] = trimmedText
+                 translateSegment(at: lastIndex, text: trimmedText)
+                 return
+            }
+        }
+    
+        // 2. Remove overlap with existing content (standard flow)
         let existingText = transcriptSegments.joined(separator: " ")
         if let processedText = TranscriptTextProcessor.removeOverlap(from: trimmedText, existingText: existingText) {
             trimmedText = processedText
@@ -854,6 +929,7 @@ struct LyricModeSettingsPopup: View {
     // Translation state
     @State private var localTranslationEnabled: Bool = false
     @State private var localTargetLanguage: String = "Vietnamese"
+    @State private var localTranslateImmediately: Bool = false
     
     // Sentence continuity state
     @State private var localSentenceContinuityEnabled: Bool = true
@@ -915,6 +991,7 @@ struct LyricModeSettingsPopup: View {
             // Translation
             localTranslationEnabled = settings.translationEnabled
             localTargetLanguage = settings.targetLanguage
+            localTranslateImmediately = settings.translateImmediately
             
             // Sentence continuity
             localSentenceContinuityEnabled = settings.sentenceContinuityEnabled
@@ -938,6 +1015,7 @@ struct LyricModeSettingsPopup: View {
         localSelectedOllamaModel != settings.selectedOllamaModel ||
         localTranslationEnabled != settings.translationEnabled ||
         localTargetLanguage != settings.targetLanguage ||
+        localTranslateImmediately != settings.translateImmediately ||
         localSentenceContinuityEnabled != settings.sentenceContinuityEnabled
     }
     
@@ -968,6 +1046,7 @@ struct LyricModeSettingsPopup: View {
         // Translation settings
         settings.translationEnabled = localTranslationEnabled
         settings.targetLanguage = localTargetLanguage
+        settings.translateImmediately = localTranslateImmediately
         
         // Sentence continuity setting
         settings.sentenceContinuityEnabled = localSentenceContinuityEnabled
@@ -1212,6 +1291,8 @@ struct LyricModeSettingsPopup: View {
             Toggle("Auto-show overlay on recording", isOn: $localAutoShowOverlay)
             
             Toggle("Show partial results highlight", isOn: $localShowPartialHighlight)
+            
+            Toggle("Translate Immediately (Live Feel)", isOn: $localTranslateImmediately)
             
             Toggle("Click-through overlay", isOn: $localIsClickThroughEnabled)
             
