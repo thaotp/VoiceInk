@@ -8,6 +8,9 @@ struct LyricModeAppleSpeechOverlayView: View {
     @State private var confirmedLines: [String] = []
     @State private var scrollProxy: ScrollViewProxy?
     @State private var isHovering = false
+    @State private var shouldAutoScroll = true
+    @State private var lastAutoScrollTime = Date.distantPast
+    @State private var lastDataUpdateTime = Date.distantPast
     
     var body: some View {
         ZStack {
@@ -219,69 +222,119 @@ struct LyricModeAppleSpeechOverlayView: View {
     
     private var transcriptionContent: some View {
         ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 6) {
-                    // Show confirmed lines (limited to visible count)
-                    ForEach(Array(visibleLines.enumerated()), id: \.offset) { index, line in
-                        Text(line)
-                            .font(.system(size: settings.fontSize, weight: index == visibleLines.count - 1 ? .semibold : .regular))
-                            .foregroundColor(index == visibleLines.count - 1 ? .white : .white.opacity(0.7))
-                            .lineLimit(nil)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .id("line-\(confirmedLines.count - visibleLines.count + index)")
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
-                    
-                    // Current partial text with typing indicator (live updates)
-                    if !speechService.partialTranscript.isEmpty {
-                        HStack(alignment: .top, spacing: 4) {
-                            Text(speechService.partialTranscript)
-                                .font(.system(size: settings.fontSize, weight: .semibold))
-                                .foregroundColor(settings.showPartialHighlight ? .cyan : .white)
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        // Show confirmed lines (limited to visible count)
+                        ForEach(Array(visibleLines.enumerated()), id: \.offset) { index, line in
+                            Text(line)
+                                .font(.system(size: settings.fontSize, weight: index == visibleLines.count - 1 ? .semibold : .regular))
+                                .foregroundColor(index == visibleLines.count - 1 ? .white : .white.opacity(0.7))
                                 .lineLimit(nil)
                                 .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
-                                .animation(.easeOut(duration: 0.1), value: speechService.partialTranscript)  // Smooth text updates
-                            
-                            if speechService.isListening {
-                                TypingIndicator()
-                                    .foregroundColor(.cyan.opacity(0.8))
+                                .id("line-\(confirmedLines.count - visibleLines.count + index)")
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        }
+                        
+                        // Current partial text with typing indicator (live updates)
+                        if !speechService.partialTranscript.isEmpty {
+                            HStack(alignment: .top, spacing: 4) {
+                                Text(speechService.partialTranscript)
+                                    .font(.system(size: settings.fontSize, weight: .semibold))
+                                    .foregroundColor(settings.showPartialHighlight ? .cyan : .white)
+                                    .lineLimit(nil)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .animation(.easeOut(duration: 0.1), value: speechService.partialTranscript)  // Smooth text updates
+                                
+                                if speechService.isListening {
+                                    TypingIndicator()
+                                        .foregroundColor(.cyan.opacity(0.8))
+                                }
                             }
+                            .id("partial")
+                            .transition(.opacity)  // Fade in/out smoothly
+                        } else if speechService.isListening && confirmedLines.isEmpty {
+                            // Show typing indicator when listening but no text yet
+                            HStack(spacing: 4) {
+                                Text("Listening...")
+                                    .font(.system(size: settings.fontSize * 0.7, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.5))
+                                TypingIndicator()
+                                    .foregroundColor(.cyan.opacity(0.6))
+                            }
+                            .id("waiting")
                         }
-                        .id("partial")
-                        .transition(.opacity)  // Fade in/out smoothly
-                    } else if speechService.isListening && confirmedLines.isEmpty {
-                        // Show typing indicator when listening but no text yet
-                        HStack(spacing: 4) {
-                            Text("Listening...")
-                                .font(.system(size: settings.fontSize * 0.7, weight: .medium))
-                                .foregroundColor(.white.opacity(0.5))
-                            TypingIndicator()
-                                .foregroundColor(.cyan.opacity(0.6))
-                        }
-                        .id("waiting")
+                        
+                        // Anchor for auto-scroll
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottom")
+                            .onAppear {
+                                shouldAutoScroll = true
+                            }
+                            .onDisappear {
+                                let now = Date()
+                                let timeSinceAutoScroll = now.timeIntervalSince(lastAutoScrollTime)
+                                let timeSinceData = now.timeIntervalSince(lastDataUpdateTime)
+                                
+                                if timeSinceAutoScroll > 0.5 && timeSinceData > 0.5 {
+                                    shouldAutoScroll = false
+                                }
+                            }
                     }
-                    
-                    // Anchor for auto-scroll
-                    Color.clear
-                        .frame(height: 1)
-                        .id("bottom")
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.vertical, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .onAppear {
-                scrollProxy = proxy
-            }
-            .onChange(of: confirmedLines.count) { _, _ in
-                withAnimation(.easeOut(duration: 0.3)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
+                .onAppear {
+                    scrollProxy = proxy
                 }
-            }
-            .onChange(of: speechService.partialTranscript) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
+                .onChange(of: confirmedLines.count) { _, _ in
+                    lastDataUpdateTime = Date()
+                    if shouldAutoScroll {
+                        lastAutoScrollTime = Date()
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
+                }
+                .onChange(of: speechService.partialTranscript) { _, _ in
+                    lastDataUpdateTime = Date()
+                    if shouldAutoScroll {
+                        lastAutoScrollTime = Date()
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
+                }
+                
+                // Resume Button
+                if !shouldAutoScroll && (!confirmedLines.isEmpty || !speechService.partialTranscript.isEmpty) {
+                    Button(action: {
+                        shouldAutoScroll = true
+                        lastAutoScrollTime = Date()
+                        withAnimation {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("Resume")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundColor(.white.opacity(0.8))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.15))
+                        )
+                        .padding(12)
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity.combined(with: .scale))
                 }
             }
         }

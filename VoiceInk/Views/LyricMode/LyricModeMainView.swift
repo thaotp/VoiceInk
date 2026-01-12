@@ -21,7 +21,8 @@ struct LyricModeMainView: View {
     @State private var isPaused = false
 
     @State private var shouldAutoScroll = true
-    @State private var isProgrammaticScroll = false
+    @State private var lastAutoScrollTime = Date.distantPast
+    @State private var lastDataUpdateTime = Date.distantPast
     @State private var translatedSegments: [String] = []
     
     private let translationService = LyricModeTranslationService()
@@ -315,12 +316,15 @@ struct LyricModeMainView: View {
                                 .onAppear {
                                     // If bottom appears, user is at bottom -> enable auto-scroll
                                     shouldAutoScroll = true
-                                    isProgrammaticScroll = false
                                 }
                                 .onDisappear {
-                                    // If bottom disappears AND we didn't just cause it by auto-scrolling,
-                                    // then user scrolled up -> disable auto-scroll
-                                    if !isProgrammaticScroll {
+                                    // Robust check: Only disable if it wasn't our own auto-scroll (within last 0.5s)
+                                    // AND not caused by a data update pushing content (within last 0.5s)
+                                    let now = Date()
+                                    let timeSinceScroll = now.timeIntervalSince(lastAutoScrollTime)
+                                    let timeSinceData = now.timeIntervalSince(lastDataUpdateTime)
+                                    
+                                    if timeSinceScroll > 0.5 && timeSinceData > 0.5 {
                                         shouldAutoScroll = false
                                     }
                                 }
@@ -330,26 +334,20 @@ struct LyricModeMainView: View {
                     .frame(maxWidth: .infinity, minHeight: 200)
                 }
                 .onChange(of: transcriptSegments.count) { _, _ in
+                    lastDataUpdateTime = Date()
                     if shouldAutoScroll {
-                        isProgrammaticScroll = true
+                        lastAutoScrollTime = Date()
                         withAnimation(.easeOut(duration: 0.2)) {
                             proxy.scrollTo("bottom", anchor: .bottom)
-                        }
-                        // Reset flag after animation
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            isProgrammaticScroll = false
                         }
                     }
                 }
                 .onChange(of: partialText) { _, _ in
+                    lastDataUpdateTime = Date()
                     if shouldAutoScroll {
-                        isProgrammaticScroll = true
+                        lastAutoScrollTime = Date()
                         withAnimation(.easeOut(duration: 0.1)) {
                             proxy.scrollTo("bottom", anchor: .bottom)
-                        }
-                        // Reset flag after animation
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            isProgrammaticScroll = false
                         }
                     }
                 }
@@ -358,13 +356,9 @@ struct LyricModeMainView: View {
                 if !shouldAutoScroll && (!transcriptSegments.isEmpty || !partialText.isEmpty) {
                     Button(action: {
                         shouldAutoScroll = true
-                        isProgrammaticScroll = true
+                        lastAutoScrollTime = Date()
                         withAnimation {
                             proxy.scrollTo("bottom", anchor: .bottom)
-                        }
-                        // Reset flag after animation
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            isProgrammaticScroll = false
                         }
                     }) {
                         Image(systemName: "arrow.down.circle.fill")

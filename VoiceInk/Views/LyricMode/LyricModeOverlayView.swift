@@ -8,6 +8,9 @@ struct LyricModeOverlayView: View {
     
     @State private var scrollProxy: ScrollViewProxy?
     @State private var isHovering = false
+    @State private var shouldAutoScroll = true
+    @State private var lastAutoScrollTime = Date.distantPast
+    @State private var lastDataUpdateTime = Date.distantPast
     
     var body: some View {
         ZStack {
@@ -85,38 +88,88 @@ struct LyricModeOverlayView: View {
     
     private var transcriptionContent: some View {
         ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    // Confirmed lines
-                    ForEach(Array(visibleConfirmedLines.enumerated()), id: \.offset) { index, line in
-                        confirmedLineView(line, isLatest: index == visibleConfirmedLines.count - 1)
-                            .id("confirmed-\(index)")
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        // Confirmed lines
+                        ForEach(Array(visibleConfirmedLines.enumerated()), id: \.offset) { index, line in
+                            confirmedLineView(line, isLatest: index == visibleConfirmedLines.count - 1)
+                                .id("confirmed-\(index)")
+                        }
+                        
+                        // Partial/current line
+                        if !transcriptionEngine.partialLine.isEmpty {
+                            partialLineView
+                                .id("partial")
+                        }
+                        
+                        // Anchor for auto-scroll
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottom")
+                            .onAppear {
+                                shouldAutoScroll = true
+                            }
+                            .onDisappear {
+                                let now = Date()
+                                let timeSinceAutoScroll = now.timeIntervalSince(lastAutoScrollTime)
+                                let timeSinceData = now.timeIntervalSince(lastDataUpdateTime)
+                                
+                                if timeSinceAutoScroll > 0.5 && timeSinceData > 0.5 {
+                                    shouldAutoScroll = false
+                                }
+                            }
                     }
-                    
-                    // Partial/current line
-                    if !transcriptionEngine.partialLine.isEmpty {
-                        partialLineView
-                            .id("partial")
+                    .padding(.vertical, 4)
+                }
+                .onAppear {
+                    scrollProxy = proxy
+                }
+                .onChange(of: transcriptionEngine.confirmedLines.count) { _, _ in
+                    lastDataUpdateTime = Date()
+                    if shouldAutoScroll {
+                        lastAutoScrollTime = Date()
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
                     }
-                    
-                    // Anchor for auto-scroll
-                    Color.clear
-                        .frame(height: 1)
-                        .id("bottom")
                 }
-                .padding(.vertical, 4)
-            }
-            .onAppear {
-                scrollProxy = proxy
-            }
-            .onChange(of: transcriptionEngine.confirmedLines.count) { _, _ in
-                withAnimation(.easeOut(duration: 0.3)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
+                .onChange(of: transcriptionEngine.partialLine) { _, _ in
+                    lastDataUpdateTime = Date()
+                    if shouldAutoScroll {
+                        lastAutoScrollTime = Date()
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
                 }
-            }
-            .onChange(of: transcriptionEngine.partialLine) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
+                
+                // Resume Button
+                if !shouldAutoScroll && (!transcriptionEngine.confirmedLines.isEmpty || !transcriptionEngine.partialLine.isEmpty) {
+                    Button(action: {
+                        shouldAutoScroll = true
+                        lastAutoScrollTime = Date()
+                        withAnimation {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("Resume")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundColor(.white.opacity(0.8))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.15))
+                        )
+                        .padding(12)
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity.combined(with: .scale))
                 }
             }
         }
