@@ -14,6 +14,7 @@ final class LyricModeWindowManager: ObservableObject {
     
     // Content state (persists across tab switches)
     @Published var transcriptSegments: [String] = []
+    @Published var translatedSegments: [String] = []
     @Published var partialText: String = ""
     @Published var recordingDuration: TimeInterval = 0
     

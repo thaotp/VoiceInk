@@ -23,14 +23,20 @@ struct LyricModeMainView: View {
     @State private var shouldAutoScroll = true
     @State private var lastAutoScrollTime = Date.distantPast
     @State private var lastDataUpdateTime = Date.distantPast
-    @State private var translatedSegments: [String] = []
+
     
     private let translationService = LyricModeTranslationService()
     
     // Convenience accessors for manager's content state
+
     private var transcriptSegments: [String] {
         get { lyricModeManager.transcriptSegments }
         nonmutating set { lyricModeManager.transcriptSegments = newValue }
+    }
+    
+    private var translatedSegments: [String] {
+        get { lyricModeManager.translatedSegments }
+        nonmutating set { lyricModeManager.translatedSegments = newValue }
     }
     
     private var partialText: String {
