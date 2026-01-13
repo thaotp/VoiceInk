@@ -16,7 +16,6 @@ struct LyricModeMainView: View {
     @State private var toastIcon = ""
     @State private var toastColor: Color = .green
     @State private var translatedText: String = ""
-    @State private var timer: Timer?
     @State private var cancellables = Set<AnyCancellable>()
     @State private var isPaused = false
 
@@ -116,13 +115,7 @@ struct LyricModeMainView: View {
                 }
             }
         }
-        .onChange(of: lyricModeManager.isRecording) { _, isRecording in
-            if isRecording {
-                startTimer()
-            } else {
-                stopTimer()
-            }
-        }
+
         .onReceive(NotificationCenter.default.publisher(for: .lyricModeStopRecording)) { _ in
             stopRecording()
         }
@@ -568,13 +561,11 @@ struct LyricModeMainView: View {
                 // Resume recording
                 isPaused = false
                 lyricModeManager.resumeRecording()
-                startTimer()
             } else if lyricModeManager.isRecording {
                 // Pause recording - finalize any partial text
                 finalizePartialText()
                 isPaused = true
                 lyricModeManager.pauseRecording()
-                stopTimer()
             } else {
                 // Start new recording
                 do {
@@ -703,17 +694,7 @@ struct LyricModeMainView: View {
         NSApplication.shared.keyWindow?.close()
     }
     
-    private func startTimer() {
-        recordingDuration = 0
-        timer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { _ in
-            recordingDuration += 0.01
-        }
-    }
-    
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
-    }
+
     
     private func subscribeToTranscription() {
         // Subscribe to transcription updates from the manager

@@ -31,6 +31,7 @@ final class LyricModeWindowManager: ObservableObject {
     private var whisperContext: WhisperContext?
     private var cancellables = Set<AnyCancellable>()
     private var deviceChangeWorkItem: DispatchWorkItem?
+    private var timer: Timer?
     
     private let audioStreamService = RealtimeAudioStreamService()
     private let vadService = FluidAudioVADService()
@@ -206,6 +207,9 @@ final class LyricModeWindowManager: ObservableObject {
         
         isRecording = true
         isVisible = true
+        
+        recordingDuration = 0
+        startTimer()
     }
     
     /// Stop recording
@@ -216,6 +220,8 @@ final class LyricModeWindowManager: ObservableObject {
         appleSpeechService?.stopListening()
         appleSpeechService = nil
         
+        stopTimer()
+        
         cancellables.removeAll()
         isRecording = false
     }
@@ -224,12 +230,14 @@ final class LyricModeWindowManager: ObservableObject {
     func pauseRecording() {
         transcriptionEngine?.pause()
         appleSpeechService?.pause()
+        stopTimer()
     }
     
     /// Resume recording after pause
     func resumeRecording() {
         transcriptionEngine?.resume()
         appleSpeechService?.resume()
+        startTimer()
     }
     
     /// Toggle overlay visibility
@@ -302,6 +310,22 @@ final class LyricModeWindowManager: ObservableObject {
         
         // Destroy old overlay so a fresh one is created on next show
         deinitializeWindow()
+    }
+    
+    // MARK: - Timer Logic
+    
+    private func startTimer() {
+        stopTimer() // Invalidate existing if any
+        timer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.recordingDuration += 0.01
+            }
+        }
+    }
+    
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
     }
     
     // MARK: - Private Methods
