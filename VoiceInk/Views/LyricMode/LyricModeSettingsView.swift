@@ -10,6 +10,9 @@ struct LyricModeSettingsView: View {
     
     @State private var isStarting = false
     
+    // Teams Live Captions state
+    @StateObject private var teamsService = TeamsLiveCaptionsService()
+    
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -278,7 +281,7 @@ struct LyricModeSettingsView: View {
                             }
                         }
                     }
-                } else {
+                } else if settings.engineType == .appleSpeech {
                     // Apple Speech settings
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
@@ -309,6 +312,98 @@ struct LyricModeSettingsView: View {
                                 Text(settings.appleSpeechMode.description)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                } else if settings.engineType == .teamsLiveCaptions {
+                    // Teams Live Captions settings
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label("Source", systemImage: "person.2.wave.2")
+                                .foregroundColor(.primary)
+                                .frame(width: 120, alignment: .leading)
+                            
+                            Spacer()
+                            
+                            Text("Microsoft Teams Live Captions")
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Divider()
+                        
+                        // Accessibility Permission Status
+                        HStack {
+                            if TeamsLiveCaptionsService.isAccessibilityEnabled() {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Accessibility Permission Granted")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                                Text("Accessibility Permission Required")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                
+                                Spacer()
+                                
+                                Button("Grant Permission") {
+                                    TeamsLiveCaptionsService.requestAccessibilityPermission()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                        
+                        Divider()
+                        
+                        // Teams Process Picker
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Teams Window")
+                                
+                                Spacer()
+                                
+                                Button(action: {
+                                    Task {
+                                        await teamsService.refreshTeamsProcesses()
+                                    }
+                                }) {
+                                    Image(systemName: "arrow.clockwise")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .help("Refresh Teams windows")
+                            }
+                            
+                            if teamsService.availableTeamsProcesses.isEmpty {
+                                HStack {
+                                    Image(systemName: "app.badge.checkmark")
+                                        .foregroundColor(.secondary)
+                                    Text("No Microsoft Teams processes found. Make sure Teams is running.")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            } else {
+                                Picker("Teams Window", selection: $teamsService.selectedProcessPID) {
+                                    Text("Select a Teams window").tag(nil as pid_t?)
+                                    ForEach(teamsService.availableTeamsProcesses) { process in
+                                        Text(process.displayName).tag(process.pid as pid_t?)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .labelsHidden()
+                            }
+                        }
+                        
+                        if let error = teamsService.errorMessage {
+                            HStack {
+                                Image(systemName: "exclamationmark.circle.fill")
+                                    .foregroundColor(.red)
+                                Text(error)
+                                    .font(.caption)
+                                    .foregroundColor(.red)
                             }
                         }
                     }
@@ -613,6 +708,11 @@ struct LyricModeSettingsView: View {
                         // For now, show an alert that cloud is not yet supported in Lyric Mode
                         // TODO: Implement cloud streaming when API supports it
                         print("Cloud transcription in Lyric Mode not yet implemented")
+                        
+                    case .teamsLiveCaptions:
+                        // Teams Live Captions just need the service to start
+                        // The overlay uses the same window manager infrastructure
+                        print("Starting Teams Live Captions...")
                     }
                 }
             } catch {

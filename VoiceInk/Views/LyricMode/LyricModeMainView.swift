@@ -22,6 +22,10 @@ struct LyricModeMainView: View {
     @State private var shouldAutoScroll = true
     @State private var lastAutoScrollTime = Date.distantPast
     @State private var lastDataUpdateTime = Date.distantPast
+    
+    // Teams Live Captions window selection
+    @State private var showingWindowSelection = false
+    @StateObject private var teamsService = TeamsLiveCaptionsService()
 
     
     private let translationService = LyricModeTranslationService()
@@ -128,6 +132,26 @@ struct LyricModeMainView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .lyricModeClearAndReset)) { _ in
             clearAndReset()
+        }
+        .sheet(isPresented: $showingWindowSelection) {
+            WindowSelectionSheet(
+                windows: teamsService.availableWindows,
+                onRefresh: { teamsService.refreshAvailableWindows() },
+                onSelect: { window in
+                    showingWindowSelection = false
+                    teamsService.selectedProcessPID = window.pid
+                    teamsService.selectedWindowTitle = window.windowTitle
+                    settings.teamsSelectedPID = Int(window.pid)
+                    settings.teamsSelectedWindowTitle = window.windowTitle
+                    // Start recording
+                    Task {
+                        await startRecordingAfterWindowSelection()
+                    }
+                },
+                onCancel: {
+                    showingWindowSelection = false
+                }
+            )
         }
     }
     
@@ -470,6 +494,8 @@ struct LyricModeMainView: View {
                         .shadow(color: recordButtonColor.opacity(0.3), radius: lyricModeManager.isRecording ? 6 : 3)
                 }
                 .buttonStyle(.plain)
+                .disabled(isDiscarding)
+                .opacity(isDiscarding ? 0.5 : 1.0)
                 .help(recordButtonHelp)
                 
                 // Clear/Reset button (Checkmark)
@@ -567,31 +593,53 @@ struct LyricModeMainView: View {
                 isPaused = true
                 lyricModeManager.pauseRecording()
             } else {
-                // Start new recording
-                do {
-                    isPaused = false
-                    try await lyricModeManager.startRecording(with: whisperState)
-                    subscribeToTranscription()
+                // Start new recording - check if Teams Live Captions needs window selection
+                if settings.engineType == .teamsLiveCaptions {
+                    // Clear previous session data before showing window selection
+                    transcriptSegments = []
+                    translatedSegments = []
+                    partialText = ""
                     
-                    // Show or hide overlay based on auto-show setting
-                    if settings.autoShowOverlay {
-                        if !lyricModeManager.isOverlayVisible {
-                            lyricModeManager.showOverlay()
-                        }
-                    } else {
-                        // Hide overlay if auto-show is disabled
-                        if lyricModeManager.isOverlayVisible {
-                            lyricModeManager.hideOverlay()
-                        }
-                    }
-                } catch {
-                    print("Failed to start recording: \(error)")
+                    // Refresh windows and show selection sheet
+                    teamsService.refreshAvailableWindows()
+                    showingWindowSelection = true
+                    return
                 }
+                
+                await startRecordingAfterWindowSelection()
             }
         }
     }
     
+    /// Start recording (called after window selection for Teams, or directly for other engines)
+    private func startRecordingAfterWindowSelection() async {
+        do {
+            isPaused = false
+            try await lyricModeManager.startRecording(with: whisperState)
+            subscribeToTranscription()
+            
+            // Show or hide overlay based on auto-show setting
+            if settings.autoShowOverlay {
+                if !lyricModeManager.isOverlayVisible {
+                    lyricModeManager.showOverlay()
+                }
+            } else {
+                // Hide overlay if auto-show is disabled
+                if lyricModeManager.isOverlayVisible {
+                    lyricModeManager.hideOverlay()
+                }
+            }
+        } catch {
+            print("Failed to start recording: \(error)")
+        }
+    }
+    
     private func stopRecording() {
+        // Cancel any pending translation requests immediately
+        Task {
+            await translationService.cancelPendingRequests()
+        }
+        
         saveCurrentSession()
         
         // Permanently stop
@@ -656,16 +704,30 @@ struct LyricModeMainView: View {
         resetState()
     }
     
+    @State private var isDiscarding = false
+    
     private func discardAndQuit() {
-        // Just reset without saving
-        resetState()
+        guard !isDiscarding else { return }
+        isDiscarding = true
         
-        // Show Discard Toast
-        toastMessage = "Session Discarded"
-        toastIcon = "trash.fill"
-        toastColor = .red
-        withAnimation {
-            showToast = true
+        // Use a task to handle graceful cleanup sequence
+        Task {
+            // 1. Reset state (stops processes, clears data)
+            await MainActor.run { resetState() }
+            
+            // 2. Show feedback
+            await MainActor.run {
+                toastMessage = "Session Discarded"
+                toastIcon = "trash.fill"
+                toastColor = .red
+                withAnimation { showToast = true }
+            }
+            
+            // 3. Wait for cleanup to settle (prevents rapid-restart races)
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+            
+            // 4. Re-enable UI
+            await MainActor.run { isDiscarding = false }
         }
     }
     
@@ -675,6 +737,10 @@ struct LyricModeMainView: View {
         }
         transcriptSegments = []
         translatedSegments = []
+        // Cancel translations
+        Task {
+             await translationService.cancelPendingRequests()
+        }
         translationService.clearHistory()
         partialText = ""
         recordingDuration = 0
@@ -701,7 +767,19 @@ struct LyricModeMainView: View {
         lyricModeManager.transcriptionPublisher
             .receive(on: DispatchQueue.main)
             .sink { [self] text in
-                processNewTranscriptSegment(text)
+                if settings.engineType == .teamsLiveCaptions {
+                    // For Teams: only translate new captions (segments are synced separately)
+                    // WindowManager only publishes non-pre-existing captions here
+                    if settings.translationEnabled {
+                        // Find the segment index for this text
+                        if let index = transcriptSegments.lastIndex(of: text) {
+                            translateSegment(at: index, text: text)
+                        }
+                    }
+                } else {
+                    // For other engines: normal processing
+                    processNewTranscriptSegment(text)
+                }
             }
             .store(in: &cancellables)
         
@@ -721,6 +799,19 @@ struct LyricModeMainView: View {
                 } else {
                     partialText = "" // Fully overlapped/confirmed
                 }
+            }
+            .store(in: &cancellables)
+        
+        // Subscribe to transcript segments for Teams Live Captions display
+        // Translation is handled by transcriptionPublisher (WindowManager only publishes non-pre-existing)
+        lyricModeManager.$transcriptSegments
+            .receive(on: DispatchQueue.main)
+            .sink { [self] segments in
+                // Only process for Teams Live Captions
+                guard settings.engineType == .teamsLiveCaptions else { return }
+                
+                // Sync local transcriptSegments with manager (display only, no translation here)
+                transcriptSegments = segments
             }
             .store(in: &cancellables)
     }
@@ -1115,6 +1206,8 @@ struct LyricModeSettingsPopup: View {
                     appleSpeechConfigSection
                 case .cloud:
                     cloudConfigSection
+                case .teamsLiveCaptions:
+                    teamsLiveCaptionsConfigSection
                 }
             }
             .padding(.top, 8)
@@ -1216,6 +1309,30 @@ struct LyricModeSettingsPopup: View {
             Text("Configure cloud API in Settings")
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+    }
+    
+    // MARK: - Teams Live Captions Config
+    
+    private var teamsLiveCaptionsConfigSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Teams Live Captions")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            
+            Text("Reads Live Captions from Microsoft Teams meetings using Accessibility API")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            if !TeamsLiveCaptionsService.isAccessibilityEnabled() {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text("Accessibility permission required")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
         }
     }
     
@@ -1466,5 +1583,137 @@ struct TranscriptParagraphView: View {
             RoundedRectangle(cornerRadius: 8)
                 .fill(isLatest ? Color.accentColor.opacity(0.05) : Color.clear)
         )
+    }
+}
+
+// MARK: - Window Selection Sheet
+
+/// A sheet view for selecting a window to read captions from
+struct WindowSelectionSheet: View {
+    let windows: [TeamsLiveCaptionsService.WindowInfo]
+    let onRefresh: () -> Void
+    let onSelect: (TeamsLiveCaptionsService.WindowInfo) -> Void
+    let onCancel: () -> Void
+    
+    @State private var searchText = ""
+    
+    private var filteredWindows: [TeamsLiveCaptionsService.WindowInfo] {
+        if searchText.isEmpty {
+            return windows
+        }
+        return windows.filter { window in
+            window.displayName.localizedCaseInsensitiveContains(searchText) ||
+            window.appName.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Select Caption Window")
+                    .font(.headline)
+                
+                Spacer()
+                
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Refresh window list")
+            }
+            .padding()
+            
+            Divider()
+            
+            // Search field
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                TextField("Search windows...", text: $searchText)
+                    .textFieldStyle(.plain)
+                if !searchText.isEmpty {
+                    Button(action: { searchText = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(8)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            
+            // Window list
+            if filteredWindows.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "rectangle.on.rectangle.slash")
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary)
+                    Text("No windows found")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    Text("Make sure Microsoft Teams is running\nwith Live Captions enabled")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            } else {
+                List(filteredWindows) { window in
+                    Button(action: { onSelect(window) }) {
+                        HStack(spacing: 12) {
+                            // App icon indicator
+                            if window.isTeamsCaptionWindow {
+                                Image(systemName: "star.fill")
+                                    .foregroundColor(.yellow)
+                                    .help("Recommended - Teams/Caption window")
+                            } else {
+                                Image(systemName: "macwindow")
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(window.windowTitle)
+                                    .font(.body)
+                                    .lineLimit(1)
+                                Text(window.appName)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Spacer()
+                            
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                        .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .listStyle(.inset)
+            }
+            
+            Divider()
+            
+            // Footer
+            HStack {
+                Text("\(filteredWindows.count) window(s)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Spacer()
+                
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.escape, modifiers: [])
+            }
+            .padding()
+        }
+        .frame(width: 450, height: 400)
     }
 }

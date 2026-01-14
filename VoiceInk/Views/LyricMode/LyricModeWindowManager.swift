@@ -28,6 +28,7 @@ final class LyricModeWindowManager: ObservableObject {
     private var windowController: NSWindowController?
     private var transcriptionEngine: RealtimeTranscriptionEngine?
     private var appleSpeechService: AppleSpeechRealtimeService?
+    private var teamsLiveCaptionsService: TeamsLiveCaptionsService?
     private var whisperContext: WhisperContext?
     private var cancellables = Set<AnyCancellable>()
     private var deviceChangeWorkItem: DispatchWorkItem?
@@ -203,6 +204,25 @@ final class LyricModeWindowManager: ObservableObject {
         case .cloud:
             // Cloud not implemented for real-time yet
             throw NSError(domain: "LyricMode", code: 2, userInfo: [NSLocalizedDescriptionKey: "Cloud engine not supported for real-time"])
+            
+        case .teamsLiveCaptions:
+            // Create Teams Live Captions service
+            let teamsService = TeamsLiveCaptionsService()
+            
+            // Set selected PID from settings if available
+            if settings.teamsSelectedPID > 0 {
+                teamsService.selectedProcessPID = pid_t(settings.teamsSelectedPID)
+                if !settings.teamsSelectedWindowTitle.isEmpty {
+                    teamsService.selectedWindowTitle = settings.teamsSelectedWindowTitle
+                }
+            }
+            
+            // Subscribe to Teams captions updates
+            subscribeToTeamsLiveCaptions(service: teamsService)
+            
+            // Start reading captions
+            teamsService.startReading()
+            teamsLiveCaptionsService = teamsService
         }
         
         isRecording = true
@@ -212,24 +232,38 @@ final class LyricModeWindowManager: ObservableObject {
         startTimer()
     }
     
-    /// Stop recording
     func stopRecording() {
         guard isRecording else { return }
+        
+        print("[WindowManager] stopRecording - Full Cleanup Starting")
         
         transcriptionEngine?.stop()
         appleSpeechService?.stopListening()
         appleSpeechService = nil
         
+        teamsLiveCaptionsService?.stopReading()
+        teamsLiveCaptionsService = nil
+        
+        // Clear transcript data to prevent stale state
+        transcriptSegments = []
+        
         stopTimer()
         
+        // Remove all Combine subscriptions
         cancellables.removeAll()
         isRecording = false
+        
+        // Destroy old window to force fresh view instances on next start
+        deinitializeWindow()
+        
+        print("[WindowManager] stopRecording - Full Cleanup Complete")
     }
     
     /// Pause recording (keeps engine alive but stops processing)
     func pauseRecording() {
         transcriptionEngine?.pause()
         appleSpeechService?.pause()
+        teamsLiveCaptionsService?.stopReading()
         stopTimer()
     }
     
@@ -237,6 +271,7 @@ final class LyricModeWindowManager: ObservableObject {
     func resumeRecording() {
         transcriptionEngine?.resume()
         appleSpeechService?.resume()
+        teamsLiveCaptionsService?.startReading()
         startTimer()
     }
     
@@ -304,9 +339,57 @@ final class LyricModeWindowManager: ObservableObject {
             .store(in: &cancellables)
     }
     
+    private func subscribeToTeamsLiveCaptions(service: TeamsLiveCaptionsService) {
+        var preExistingCount: Int = -1  // -1 means not yet initialized
+        
+        service.$captionEntries
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] entries in
+                let sinkStart = Date()
+                defer {
+                    let sinkDur = Date().timeIntervalSince(sinkStart)
+                    if sinkDur > 0.1 { print("[WindowManager] SLOW sink: \(String(format: "%.3f", sinkDur))s") }
+                }
+                guard let self = self else { return }
+                
+                // On first update, count pre-existing entries (skip translation for these)
+                if preExistingCount == -1 {
+                    preExistingCount = entries.filter { $0.isPreExisting }.count
+                    print("[WindowManager] Pre-existing captions: \(preExistingCount) (translation skipped)")
+                }
+                
+                // Sync transcript segments with caption entries
+                let newSegments = entries.map { entry in
+                    entry.speaker != "Unknown" 
+                        ? "[\(entry.speaker)]: \(entry.text)" 
+                        : entry.text
+                }
+                
+                // Only update if there are changes
+                if newSegments != self.transcriptSegments {
+                    let previousNewCount = max(0, self.transcriptSegments.count - preExistingCount)
+                    self.transcriptSegments = newSegments
+                    
+                    // Only publish NEW segments (after pre-existing ones) for translation
+                    let currentNewCount = entries.count - preExistingCount
+                    if currentNewCount > previousNewCount {
+                        // New caption arrived - publish only the latest new one
+                        if let lastEntry = entries.last, !lastEntry.isPreExisting {
+                            let lastSegment = lastEntry.speaker != "Unknown"
+                                ? "[\(lastEntry.speaker)]: \(lastEntry.text)"
+                                : lastEntry.text
+                            self.transcriptionPublisher.send(lastSegment)
+                        }
+                    }
+                }
+            }
+            .store(in: &cancellables)
+    }
+    
     func clear() {
         transcriptionEngine?.clear()
         appleSpeechService?.clear()
+        teamsLiveCaptionsService?.clear()
         
         // Destroy old overlay so a fresh one is created on next show
         deinitializeWindow()
@@ -316,9 +399,9 @@ final class LyricModeWindowManager: ObservableObject {
     
     private func startTimer() {
         stopTimer() // Invalidate existing if any
-        timer = Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.recordingDuration += 0.01
+                self?.recordingDuration += 0.1
             }
         }
     }

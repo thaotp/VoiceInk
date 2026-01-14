@@ -2,6 +2,7 @@ import Foundation
 
 /// Lightweight translation service for Lyric Mode using Ollama Chat API
 /// Maintains conversation history for context-aware translations
+/// Uses serial queue to process requests sequentially (avoids Ollama bottlenecks)
 class LyricModeTranslationService {
     
     private let settings = LyricModeSettings.shared
@@ -12,14 +13,36 @@ class LyricModeTranslationService {
     /// Maximum messages to retain (to prevent token overflow)
     private let maxHistoryMessages = 20
     
+    /// Serial semaphore for sequential translation requests (1 at a time)
+    private let translationSemaphore = AsyncSemaphore(value: 1)
+    
     /// Clear conversation history (call when starting new session)
     func clearHistory() {
         messageHistory = []
     }
     
+    /// Cancel pending (queued) translation requests
+    func cancelPendingRequests() async {
+        await translationSemaphore.cancelAll()
+    }
+    
     /// Translate text to the target language using configured Ollama model
+    /// Requests are processed sequentially to avoid overwhelming Ollama
     func translate(_ text: String) async throws -> String {
         guard !text.isEmpty else { return "" }
+        
+        // Wait for any in-progress translation to complete (sequential processing)
+        // This will throw if cancelled
+        try await translationSemaphore.wait()
+        defer {
+            Task { await translationSemaphore.signal() }
+        }
+        
+        // Final check for cancellation before starting network request
+        if Task.isCancelled { return "" }
+        
+        let startTime = Date()
+        print("[Translation] Starting translation for: \(text.prefix(30))...")
         
         let baseURL = settings.ollamaBaseURL
         let model = settings.selectedOllamaModel
@@ -128,6 +151,9 @@ class LyricModeTranslationService {
             messageHistory = Array(messageHistory.suffix(maxHistoryMessages))
         }
         
+        let duration = Date().timeIntervalSince(startTime)
+        print("[Translation] Completed in \(String(format: "%.2f", duration))s")
+        
         return translation
     }
 }
@@ -151,5 +177,49 @@ enum TranslationError: Error, LocalizedError {
         case .notConnected:
             return "Ollama is not connected"
         }
+    }
+}
+
+// MARK: - Serial Translation Queue
+
+/// Simple async semaphore to ensure sequential translation requests
+/// Prevents overwhelming Ollama with parallel requests
+actor AsyncSemaphore {
+    private var count: Int
+    private var waiters: [CheckedContinuation<Void, Error>] = []
+    
+    init(value: Int = 1) {
+        self.count = value
+    }
+    
+    func wait() async throws {
+        if count > 0 {
+            count -= 1
+            return
+        }
+        
+        try await withCheckedThrowingContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+    
+    func signal() {
+        if let waiter = waiters.first {
+            waiters.removeFirst()
+            waiter.resume()
+        } else {
+            count += 1
+        }
+    }
+    
+    /// Cancel all waiting tasks
+    func cancelAll() {
+        // Resume all waiters with cancellation error
+        for waiter in waiters {
+            waiter.resume(throwing: CancellationError())
+        }
+        waiters.removeAll()
+        // Reset count to initial value to allow fresh start
+        count = 1
     }
 }

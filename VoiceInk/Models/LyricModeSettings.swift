@@ -5,6 +5,7 @@ enum LyricModeEngineType: String, CaseIterable, Identifiable {
     case whisper = "Whisper"
     case appleSpeech = "Apple Speech"
     case cloud = "Cloud"
+    case teamsLiveCaptions = "Teams Live Captions"
     
     var id: String { rawValue }
     
@@ -16,6 +17,8 @@ enum LyricModeEngineType: String, CaseIterable, Identifiable {
             return "Apple's built-in speech recognition (no download)"
         case .cloud:
             return "Cloud transcription (requires API key)"
+        case .teamsLiveCaptions:
+            return "Read Live Captions from Microsoft Teams meetings"
         }
     }
     
@@ -27,6 +30,8 @@ enum LyricModeEngineType: String, CaseIterable, Identifiable {
             return "apple.logo"
         case .cloud:
             return "cloud"
+        case .teamsLiveCaptions:
+            return "person.2.wave.2"
         }
     }
 }
@@ -89,6 +94,11 @@ class LyricModeSettings: ObservableObject {
             }
         }
     }
+    
+    // Teams Live Captions settings
+    @AppStorage("lyricMode.teamsSelectedPID") var teamsSelectedPID: Int = 0
+    @AppStorage("lyricMode.teamsSelectedWindowTitle") var teamsSelectedWindowTitle: String = ""
+    @AppStorage("lyricMode.teamsCaptionsPollInterval") var teamsCaptionsPollInterval: Double = 0.1
     
     enum AppleSpeechMode: String, CaseIterable, Identifiable {
         case standard = "Standard" // SpeechTranscriber (High Accuracy)
