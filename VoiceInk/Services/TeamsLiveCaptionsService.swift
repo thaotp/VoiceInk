@@ -146,10 +146,38 @@ final class TeamsLiveCaptionsService: ObservableObject {
         }
     }
     
-    func stopReading() {
+    /// Pause reading - stops polling but preserves data
+    func pauseReading() {
         isReading = false
         pollTimer?.invalidate()
         pollTimer = nil
+        // Keep captionEntries and seenCaptionKeys intact for resume
+    }
+    
+    /// Resume reading after pause - restarts polling without clearing data
+    func resumeReading() {
+        guard !isReading else { return } // Already reading
+        guard currentPID != nil else {
+            // If no PID, need to start fresh
+            startReading()
+            return
+        }
+        
+        isReading = true
+        isFirstPoll = false // Not first poll when resuming
+        
+        // Restart polling timer
+        pollTimer?.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.backgroundQueue.async { [weak self] in
+                self?.pollOnBackground()
+            }
+        }
+    }
+    
+    /// Stop reading completely - clears all data
+    func stopReading() {
+        pauseReading()
         captionEntries = []
         seenCaptionKeys = []
         liveCaptionsContainer = nil

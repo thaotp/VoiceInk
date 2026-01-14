@@ -768,12 +768,24 @@ struct LyricModeMainView: View {
             .receive(on: DispatchQueue.main)
             .sink { [self] text in
                 if settings.engineType == .teamsLiveCaptions {
-                    // For Teams: only translate new captions (segments are synced separately)
-                    // WindowManager only publishes non-pre-existing captions here
+                    // For Teams: WindowManager publishes NEW caption text for translation
+                    // The segment is already added to transcriptSegments via $transcriptSegments sync
+                    // We just need to translate the new entry
                     if settings.translationEnabled {
-                        // Find the segment index for this text
-                        if let index = transcriptSegments.lastIndex(of: text) {
-                            translateSegment(at: index, text: text)
+                        // The new segment index is transcriptSegments.count - 1
+                        let newIndex = transcriptSegments.count - 1
+                        if newIndex >= 0 && newIndex < translatedSegments.count {
+                            // Only translate if not already translated
+                            if translatedSegments[newIndex].isEmpty {
+                                translateSegment(at: newIndex, text: text)
+                            }
+                        } else {
+                            // Sync translatedSegments and translate
+                            syncTranslatedSegmentsCount()
+                            let idx = transcriptSegments.count - 1
+                            if idx >= 0 {
+                                translateSegment(at: idx, text: text)
+                            }
                         }
                     }
                 } else {
@@ -802,8 +814,19 @@ struct LyricModeMainView: View {
             }
             .store(in: &cancellables)
         
-        // Removed: Redundant $transcriptSegments subscription was causing cascade updates
-        // For Teams Live Captions, segments are already handled by the transcriptionPublisher flow
+        // Subscribe to transcript segments for Teams Live Captions display
+        lyricModeManager.$transcriptSegments
+            .receive(on: DispatchQueue.main)
+            .removeDuplicates() // Prevent cascade updates for same content
+            .sink { [self] segments in
+                // Only process for Teams Live Captions
+                guard settings.engineType == .teamsLiveCaptions else { return }
+                
+                // Sync local transcriptSegments with manager
+                transcriptSegments = segments
+                syncTranslatedSegmentsCount()
+            }
+            .store(in: &cancellables)
     }
     
     private func processLiveTranslation(from text: String) {
@@ -1010,9 +1033,11 @@ struct LyricModeSettingsPopup: View {
                     
                     appearanceSection
                     
-                    Divider()
-                    
-                    behaviorSection
+                    // Behavior section not needed for Teams mode
+                    if localEngineType != .teamsLiveCaptions {
+                        Divider()
+                        behaviorSection
+                    }
                     
                     Divider()
                     

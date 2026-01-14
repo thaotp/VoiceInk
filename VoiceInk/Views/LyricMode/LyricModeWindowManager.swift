@@ -263,7 +263,7 @@ final class LyricModeWindowManager: ObservableObject {
     func pauseRecording() {
         transcriptionEngine?.pause()
         appleSpeechService?.pause()
-        teamsLiveCaptionsService?.stopReading()
+        teamsLiveCaptionsService?.pauseReading() // Use pause instead of stop to preserve data
         stopTimer()
     }
     
@@ -271,7 +271,7 @@ final class LyricModeWindowManager: ObservableObject {
     func resumeRecording() {
         transcriptionEngine?.resume()
         appleSpeechService?.resume()
-        teamsLiveCaptionsService?.startReading()
+        teamsLiveCaptionsService?.resumeReading() // Use resume to preserve data
         startTimer()
     }
     
