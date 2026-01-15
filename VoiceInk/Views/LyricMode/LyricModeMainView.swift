@@ -26,6 +26,9 @@ struct LyricModeMainView: View {
     // Teams Live Captions window selection
     @State private var showingWindowSelection = false
     @StateObject private var teamsService = TeamsLiveCaptionsService()
+    
+    // Segment management
+    @State private var ignoredSegments: Set<Int> = []
 
     
     private let translationService = LyricModeTranslationService()
@@ -303,22 +306,32 @@ struct LyricModeMainView: View {
                         } else {
                             // Display each transcript segment as a paragraph
                             ForEach(Array(transcriptSegments.enumerated()), id: \.offset) { index, segment in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    TranscriptParagraphView(
-                                        text: segment,
-                                        fontSize: settings.fontSize,
-                                        isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty
-                                    )
-                                    
-                                    // Show translation if enabled and available
-                                    if settings.translationEnabled && index < translatedSegments.count && !translatedSegments[index].isEmpty {
-                                        Text(translatedSegments[index])
-                                            .font(.system(size: settings.fontSize * 0.85))
-                                            .foregroundColor(.secondary)
-                                            .padding(.horizontal, 31) // Align with paragraph text (16 + 15 for indicator bar)
-                                            .padding(.bottom, 4)
+                                SegmentRowView(
+                                    index: index,
+                                    segment: segment,
+                                    translation: index < translatedSegments.count ? translatedSegments[index] : "",
+                                    fontSize: settings.fontSize,
+                                    isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty,
+                                    isIgnored: ignoredSegments.contains(index),
+                                    translationEnabled: settings.translationEnabled,
+                                    onCopy: {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(segment, forType: .string)
+                                        showToastMessage("Copied to clipboard", icon: "doc.on.doc", color: .blue)
+                                    },
+                                    onRetranslate: {
+                                        retranslateSegment(at: index, text: segment)
+                                    },
+                                    onToggleIgnore: {
+                                        if ignoredSegments.contains(index) {
+                                            ignoredSegments.remove(index)
+                                            showToastMessage("Segment restored", icon: "eye", color: .green)
+                                        } else {
+                                            ignoredSegments.insert(index)
+                                            showToastMessage("Segment ignored", icon: "eye.slash", color: .orange)
+                                        }
                                     }
-                                }
+                                )
                             }
                             
                             // Partial (in-progress) text
@@ -975,6 +988,53 @@ struct LyricModeMainView: View {
             }
         }
     }
+    
+    /// Retranslate a segment (forces re-translation by clearing first)
+    private func retranslateSegment(at index: Int, text: String) {
+        guard settings.translationEnabled else { return }
+        
+        syncTranslatedSegmentsCount()
+        
+        // Clear existing translation first
+        if index < translatedSegments.count {
+            translatedSegments[index] = ""
+        }
+        
+        // Show toast
+        showToastMessage("Retranslating...", icon: "arrow.triangle.2.circlepath", color: .blue)
+        
+        Task {
+            do {
+                let translation = try await translationService.translate(text)
+                await MainActor.run {
+                    if index < translatedSegments.count {
+                        translatedSegments[index] = translation
+                        showToastMessage("Retranslated", icon: "checkmark.circle", color: .green)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    showToastMessage("Translation failed", icon: "xmark.circle", color: .red)
+                }
+                print("Retranslation error: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    /// Show a toast message with icon and color
+    private func showToastMessage(_ message: String, icon: String, color: Color) {
+        toastMessage = message
+        toastIcon = icon
+        toastColor = color
+        showToast = true
+        
+        // Auto-dismiss after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            if toastMessage == message {
+                showToast = false
+            }
+        }
+    }
 }
 
 // MARK: - Settings Popup
@@ -1569,6 +1629,99 @@ struct LyricModeSettingsPopup: View {
     }
 }
 
+// MARK: - Segment Row View (with hover actions)
+
+/// A view that displays a segment with hover-revealed action buttons
+struct SegmentRowView: View {
+    let index: Int
+    let segment: String
+    let translation: String
+    let fontSize: CGFloat
+    let isLatest: Bool
+    let isIgnored: Bool
+    let translationEnabled: Bool
+    
+    let onCopy: () -> Void
+    let onRetranslate: () -> Void
+    let onToggleIgnore: () -> Void
+    
+    @State private var isHovering = false
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            // Main content
+            VStack(alignment: .leading, spacing: 4) {
+                TranscriptParagraphView(
+                    text: segment,
+                    fontSize: fontSize,
+                    isLatest: isLatest
+                )
+                .opacity(isIgnored ? 0.5 : 1.0)
+                
+                // Show translation if enabled and available
+                if translationEnabled && !translation.isEmpty {
+                    Text(translation)
+                        .font(.system(size: fontSize * 0.85))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 31)
+                        .padding(.bottom, 4)
+                        .opacity(isIgnored ? 0.5 : 1.0)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            
+            // Action buttons container (always present for consistent hover area)
+            HStack(spacing: 4) {
+                // Copy button
+                Button(action: onCopy) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .frame(width: 24, height: 24)
+                        .background(Color.gray.opacity(0.2))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Copy to clipboard")
+                
+                // Retranslate button (only if translation enabled)
+                if translationEnabled {
+                    Button(action: onRetranslate) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .frame(width: 24, height: 24)
+                            .background(Color.gray.opacity(0.2))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Retranslate")
+                }
+                
+                // Ignore/Unignore button
+                Button(action: onToggleIgnore) {
+                    Image(systemName: isIgnored ? "eye" : "eye.slash")
+                        .font(.system(size: 12))
+                        .foregroundColor(isIgnored ? .green : .secondary)
+                        .frame(width: 24, height: 24)
+                        .background(Color.gray.opacity(0.2))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(isIgnored ? "Unignore segment" : "Ignore segment")
+            }
+            .padding(.trailing, 8)
+            .opacity(isHovering ? 1 : 0)
+            .animation(.easeInOut(duration: 0.15), value: isHovering)
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle()) // Make entire row hoverable
+        .onHover { hovering in
+            isHovering = hovering
+        }
+    }
+}
+
 // MARK: - Transcript Paragraph View
 
 /// A view that displays a single transcript paragraph with improved readability
@@ -1613,10 +1766,13 @@ struct WindowSelectionSheet: View {
     @State private var searchText = ""
     
     private var filteredWindows: [TeamsLiveCaptionsService.WindowInfo] {
+        // Only show Teams-related windows
+        let teamsWindows = windows.filter { $0.isTeamsCaptionWindow }
+        
         if searchText.isEmpty {
-            return windows
+            return teamsWindows
         }
-        return windows.filter { window in
+        return teamsWindows.filter { window in
             window.displayName.localizedCaseInsensitiveContains(searchText) ||
             window.appName.localizedCaseInsensitiveContains(searchText)
         }
