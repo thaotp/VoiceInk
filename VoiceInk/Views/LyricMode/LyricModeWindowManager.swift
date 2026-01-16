@@ -324,10 +324,18 @@ final class LyricModeWindowManager: ObservableObject {
     }
     
     private func subscribeToAppleSpeechTranscription(service: AppleSpeechRealtimeService) {
+        var publishedForTranslation: Set<String> = [] // Cache to prevent duplicate translation
+        
         service.transcriptionPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] text in
-                self?.transcriptionPublisher.send(text)
+                guard let self = self else { return }
+                
+                // Only publish if not already sent for translation
+                if !publishedForTranslation.contains(text) {
+                    publishedForTranslation.insert(text)
+                    self.transcriptionPublisher.send(text)
+                }
             }
             .store(in: &cancellables)
         
@@ -341,6 +349,7 @@ final class LyricModeWindowManager: ObservableObject {
     
     private func subscribeToTeamsLiveCaptions(service: TeamsLiveCaptionsService) {
         var preExistingCount: Int = -1  // -1 means not yet initialized
+        var publishedForTranslation: Set<String> = [] // Cache of segments already sent for translation
         
         service.$captionEntries
             .receive(on: DispatchQueue.main)
@@ -356,6 +365,14 @@ final class LyricModeWindowManager: ObservableObject {
                 if preExistingCount == -1 {
                     preExistingCount = entries.filter { $0.isPreExisting }.count
                     print("[WindowManager] Pre-existing captions: \(preExistingCount) (translation skipped)")
+                    
+                    // Mark pre-existing as already "published" so they won't be translated
+                    for entry in entries where entry.isPreExisting {
+                        let segment = entry.speaker != "Unknown"
+                            ? "[\(entry.speaker)]: \(entry.text)"
+                            : entry.text
+                        publishedForTranslation.insert(segment)
+                    }
                 }
                 
                 // Sync transcript segments with caption entries
@@ -367,18 +384,18 @@ final class LyricModeWindowManager: ObservableObject {
                 
                 // Only update if there are changes
                 if newSegments != self.transcriptSegments {
-                    let previousNewCount = max(0, self.transcriptSegments.count - preExistingCount)
                     self.transcriptSegments = newSegments
                     
-                    // Only publish NEW segments (after pre-existing ones) for translation
-                    let currentNewCount = entries.count - preExistingCount
-                    if currentNewCount > previousNewCount {
-                        // New caption arrived - publish only the latest new one
-                        if let lastEntry = entries.last, !lastEntry.isPreExisting {
-                            let lastSegment = lastEntry.speaker != "Unknown"
-                                ? "[\(lastEntry.speaker)]: \(lastEntry.text)"
-                                : lastEntry.text
-                            self.transcriptionPublisher.send(lastSegment)
+                    // Publish only NEW segments that haven't been published yet
+                    for entry in entries where !entry.isPreExisting {
+                        let segment = entry.speaker != "Unknown"
+                            ? "[\(entry.speaker)]: \(entry.text)"
+                            : entry.text
+                        
+                        // Only publish if not already sent for translation
+                        if !publishedForTranslation.contains(segment) {
+                            publishedForTranslation.insert(segment)
+                            self.transcriptionPublisher.send(segment)
                         }
                     }
                 }

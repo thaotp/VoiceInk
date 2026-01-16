@@ -237,15 +237,24 @@ final class TeamsLiveCaptionsService: ObservableObject {
         // Extract captions
         let rawCaptions = extractCaptions(from: container)
         
-        // Filter to only complete sentences and new ones
+        // Only finalize a caption when it's NOT the last line
+        // (The last line is still being updated by Teams in real-time)
         let sentenceEndings: Set<Character> = ["。", ".", "!", "?", "！", "？", "…"]
         var newEntries: [CaptionEntry] = []
         
-        for caption in rawCaptions {
+        for (index, caption) in rawCaptions.enumerated() {
             let text = caption.text
-            guard !text.isEmpty,
-                  let lastChar = text.last,
-                  sentenceEndings.contains(lastChar) else {
+            guard !text.isEmpty else { continue }
+            
+            // Skip the last caption - it's still being updated by Teams
+            let isLastCaption = (index == rawCaptions.count - 1)
+            if isLastCaption {
+                continue
+            }
+            
+            // This caption is finalized (there's a newer line below it)
+            // Check if it ends with a sentence ending
+            guard let lastChar = text.last, sentenceEndings.contains(lastChar) else {
                 continue
             }
             
