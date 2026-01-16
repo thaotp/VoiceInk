@@ -29,6 +29,9 @@ struct LyricModeMainView: View {
     
     // Segment management
     @State private var ignoredSegments: Set<Int> = []
+    
+    // Track segments created by Live Translation mode to avoid duplicates
+    @State private var liveTranslationCreatedSegments: Set<String> = []
 
     
     private let translationService = LyricModeTranslationService()
@@ -803,6 +806,18 @@ struct LyricModeMainView: View {
                     }
                 } else {
                     // For other engines: normal processing
+                    // Skip if this segment was already created by Live Translation mode
+                    if settings.translateImmediately && liveTranslationCreatedSegments.contains(text) {
+                        // Already processed by live translation, just update if needed
+                        if let existingIndex = transcriptSegments.firstIndex(where: { 
+                            TranscriptTextProcessor.similarityRatio($0, text) > 0.7 
+                        }) {
+                            // Replace with the final version (more accurate)
+                            transcriptSegments[existingIndex] = text
+                            translateSegment(at: existingIndex, text: text)
+                        }
+                        return
+                    }
                     processNewTranscriptSegment(text)
                 }
             }
@@ -863,6 +878,8 @@ struct LyricModeMainView: View {
                 continue
             }
             
+            // Track this sentence as created by live translation
+            liveTranslationCreatedSegments.insert(sentence)
             processNewTranscriptSegment(sentence)
         }
     }
@@ -956,10 +973,37 @@ struct LyricModeMainView: View {
             }
         }
         
+        // Check if new segment is too similar to any existing segment (>70% similarity)
+        // If similar, REPLACE with the longer version instead of skipping
+        if let similarIndex = findMostSimilarSegment(trimmedText, threshold: 0.7) {
+            // Replace with the longer version
+            if trimmedText.count >= transcriptSegments[similarIndex].count {
+                transcriptSegments[similarIndex] = trimmedText
+                translateSegment(at: similarIndex, text: trimmedText)
+            }
+            return
+        }
+        
         // Normal case: append as new paragraph
         transcriptSegments.append(trimmedText)
         syncTranslatedSegmentsCount()
         translateSegment(at: transcriptSegments.count - 1, text: trimmedText)
+    }
+    
+    /// Find the index of the most similar existing segment above threshold
+    private func findMostSimilarSegment(_ newText: String, threshold: Double) -> Int? {
+        var bestMatch: (Int, Double)? = nil
+        
+        for (index, segment) in transcriptSegments.enumerated() {
+            let similarity = TranscriptTextProcessor.similarityRatio(newText, segment)
+            if similarity > threshold {
+                if bestMatch == nil || similarity > bestMatch!.1 {
+                    bestMatch = (index, similarity)
+                }
+            }
+        }
+        
+        return bestMatch?.0
     }
     
     /// Ensure translatedSegments array matches transcriptSegments count

@@ -262,6 +262,23 @@ final class TeamsLiveCaptionsService: ObservableObject {
             if seenCaptionKeys.contains(key) { continue }
             seenCaptionKeys.insert(key)
             
+            // Check similarity against existing entries
+            // If >70% similar, REPLACE the old entry with the newer one (keeps longer/more complete version)
+            if let (similarIndex, _) = findMostSimilar(text, in: captionEntries, threshold: 0.7) {
+                // Replace with the longer version
+                if text.count >= captionEntries[similarIndex].text.count {
+                    var entry = CaptionEntry(speaker: caption.speaker, text: text)
+                    entry.isPreExisting = captionEntries[similarIndex].isPreExisting
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, self.isReading else { return }
+                        if similarIndex < self.captionEntries.count {
+                            self.captionEntries[similarIndex] = entry
+                        }
+                    }
+                }
+                continue
+            }
+            
             var entry = CaptionEntry(speaker: caption.speaker, text: text)
             if isFirstPoll {
                 entry.isPreExisting = true
@@ -278,6 +295,71 @@ final class TeamsLiveCaptionsService: ObservableObject {
                 self.captionEntries.append(contentsOf: newEntries)
             }
         }
+    }
+    
+    /// Find the most similar existing entry above threshold
+    /// Returns (index, similarity) or nil if none found
+    private func findMostSimilar(_ newText: String, in entries: [CaptionEntry], threshold: Double) -> (Int, Double)? {
+        var bestMatch: (Int, Double)? = nil
+        
+        for (index, entry) in entries.enumerated() {
+            let similarity = similarityRatio(newText, entry.text)
+            if similarity > threshold {
+                if bestMatch == nil || similarity > bestMatch!.1 {
+                    bestMatch = (index, similarity)
+                }
+            }
+        }
+        
+        return bestMatch
+    }
+    
+    /// Check if new text is too similar to any existing text (>30% similarity)
+    private func isTooSimilarToAny(_ newText: String, in existingTexts: [String], threshold: Double = 0.3) -> Bool {
+        for existing in existingTexts {
+            let similarity = similarityRatio(newText, existing)
+            if similarity > threshold {
+                return true
+            }
+        }
+        return false
+    }
+    
+    /// Calculate similarity ratio using Longest Common Subsequence
+    private func similarityRatio(_ text1: String, _ text2: String) -> Double {
+        guard !text1.isEmpty && !text2.isEmpty else { return 0.0 }
+        
+        let s1 = Array(text1.lowercased())
+        let s2 = Array(text2.lowercased())
+        
+        let lcsLength = longestCommonSubsequenceLength(s1, s2)
+        let maxLength = max(s1.count, s2.count)
+        
+        return Double(lcsLength) / Double(maxLength)
+    }
+    
+    /// Calculate longest common subsequence length
+    private func longestCommonSubsequenceLength(_ s1: [Character], _ s2: [Character]) -> Int {
+        let m = s1.count
+        let n = s2.count
+        guard m > 0 && n > 0 else { return 0 }
+        
+        var prev = [Int](repeating: 0, count: n + 1)
+        var curr = [Int](repeating: 0, count: n + 1)
+        
+        for i in 1...m {
+            for j in 1...n {
+                if s1[i - 1] == s2[j - 1] {
+                    curr[j] = prev[j - 1] + 1
+                } else {
+                    curr[j] = max(prev[j], curr[j - 1])
+                }
+            }
+            swap(&prev, &curr)
+            curr = [Int](repeating: 0, count: n + 1)
+        }
+        
+        return prev[n]
     }
     
     // MARK: - AX Helpers (called on background queue)

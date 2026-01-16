@@ -118,4 +118,61 @@ enum TranscriptTextProcessor {
         
         return nil
     }
+    
+    // MARK: - Similarity Detection
+    
+    /// Calculate similarity ratio between two strings (0.0 to 1.0)
+    /// Uses longest common subsequence ratio
+    static func similarityRatio(_ text1: String, _ text2: String) -> Double {
+        guard !text1.isEmpty && !text2.isEmpty else { return 0.0 }
+        
+        let s1 = Array(text1.lowercased())
+        let s2 = Array(text2.lowercased())
+        
+        // Use LCS (Longest Common Subsequence) for similarity
+        let lcsLength = longestCommonSubsequenceLength(s1, s2)
+        let maxLength = max(s1.count, s2.count)
+        
+        return Double(lcsLength) / Double(maxLength)
+    }
+    
+    /// Calculate longest common subsequence length
+    private static func longestCommonSubsequenceLength(_ s1: [Character], _ s2: [Character]) -> Int {
+        let m = s1.count
+        let n = s2.count
+        
+        // Optimization: use only two rows instead of full matrix
+        var prev = [Int](repeating: 0, count: n + 1)
+        var curr = [Int](repeating: 0, count: n + 1)
+        
+        for i in 1...m {
+            for j in 1...n {
+                if s1[i - 1] == s2[j - 1] {
+                    curr[j] = prev[j - 1] + 1
+                } else {
+                    curr[j] = max(prev[j], curr[j - 1])
+                }
+            }
+            swap(&prev, &curr)
+            curr = [Int](repeating: 0, count: n + 1)
+        }
+        
+        return prev[n]
+    }
+    
+    /// Check if new text is too similar to any existing segment
+    /// - Parameters:
+    ///   - newText: The new text to check
+    ///   - existingSegments: Array of existing segments
+    ///   - threshold: Similarity threshold (default 0.3 = 30%)
+    /// - Returns: True if new text is too similar to any existing segment
+    static func isTooSimilarToAny(_ newText: String, in existingSegments: [String], threshold: Double = 0.3) -> Bool {
+        for existing in existingSegments {
+            let similarity = similarityRatio(newText, existing)
+            if similarity > threshold {
+                return true
+            }
+        }
+        return false
+    }
 }
