@@ -9,137 +9,150 @@ struct LyricModeSettingsView: View {
     @ObservedObject var audioDeviceManager = AudioDeviceManager.shared
     
     @State private var isStarting = false
+    @State private var hoverEngine: LyricModeEngineType?
     
     // Teams Live Captions state
     @StateObject private var teamsService = TeamsLiveCaptionsService()
     
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                // Header
-                headerSection
-                
-                Divider()
-                
-                // Control Section
-                controlSection
-                
-                Divider()
-                
-                // Transcription Settings (Lyrics-specific)
-                transcriptionSettingsSection
-                
-                Divider()
-                
-                // Appearance Settings
-                appearanceSection
-                
-                Divider()
-                
-                // Behavior Settings
-                behaviorSection
+        ZStack(alignment: .bottom) {
+            ScrollView {
+                VStack(spacing: 32) {
+                    // 1. Live Preview Section (Hero)
+                    VStack(spacing: 16) {
+                        Text("Live Preview")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 24)
+                        
+                        LyricPreviewView(settings: settings)
+                            .frame(height: 140)
+                            .padding(.horizontal, 24)
+                    }
+                    .padding(.top, 24)
+                    
+                    // 2. Transcription Engine Selection
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Transcription Engine")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 24)
+                        
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                Spacer().frame(width: 12) // Leading padding
+                                ForEach(LyricModeEngineType.allCases) { type in
+                                    EngineSelectionCard(
+                                        type: type,
+                                        isSelected: settings.engineType == type,
+                                        action: { settings.engineType = type }
+                                    )
+                                }
+                                Spacer().frame(width: 12) // Trailing padding
+                            }
+                        }
+                    }
+                    
+                    // 3. Engine Specific Settings
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Configuration")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 24)
+                        
+                        SettingsCard {
+                            engineSpecificSettings
+                        }
+                        .padding(.horizontal, 24)
+                    }
+                    
+                    // 4. Appearance & Behavior Grid
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Customization")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 24)
+                        
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 16)], spacing: 16) {
+                            // Appearance Card
+                            SettingsCard(title: "Appearance", icon: "paintbrush") {
+                                appearanceSettingsContent
+                            }
+                            
+                            // Behavior Card
+                            SettingsCard(title: "Behavior", icon: "gearshape.2") {
+                                behaviorSettingsContent
+                            }
+                        }
+                        .padding(.horizontal, 24)
+                    }
+                    
+                    // Spacer for bottom bar
+                    Spacer().frame(height: 100)
+                }
             }
-            .padding(24)
+            .background(Color(NSColor.windowBackgroundColor))
+            
+            // 5. Floating Action Bar
+            controlBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(NSColor.windowBackgroundColor))
     }
     
-    // MARK: - Header
+    // MARK: - Control Bar
     
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Image(systemName: "text.bubble.fill")
-                    .font(.system(size: 32))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.cyan, .blue],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Lyric Mode")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    
-                    Text("Real-time transcription overlay")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            Text("Display your speech as text in real-time with a floating overlay. Perfect for presentations, meetings, or accessibility.")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .padding(.top, 4)
-        }
-    }
-    
-    // MARK: - Control Section
-    
-    private var controlSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Controls")
-                .font(.headline)
-            
-            HStack(spacing: 16) {
-                // Start/Stop Button
-                Button(action: toggleLyricMode) {
-                    HStack(spacing: 8) {
-                        if isStarting {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                                .frame(width: 16, height: 16)
-                        } else {
-                            Image(systemName: lyricModeManager.isVisible ? "stop.fill" : "play.fill")
-                        }
-                        Text(lyricModeManager.isVisible ? "Stop Lyric Mode" : "Start Lyric Mode")
-                    }
-                    .frame(minWidth: 160)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(lyricModeManager.isVisible ? .red : .blue)
-                .disabled(isStarting || selectedModel == nil)
-                
-                // Clear Button
-                if lyricModeManager.isVisible {
-                    Button(action: { lyricModeManager.clear() }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "trash")
-                            Text("Clear")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-            
-            // Status indicator
+    private var controlBar: some View {
+        HStack {
+            // Status
             HStack(spacing: 8) {
                 Circle()
-                    .fill(lyricModeManager.isVisible ? Color.green : Color.gray)
+                    .fill(lyricModeManager.isVisible ? Color.green : Color.red)
                     .frame(width: 8, height: 8)
+                    .shadow(color: (lyricModeManager.isVisible ? Color.green : Color.red).opacity(0.5), radius: 4)
                 
-                Text(lyricModeManager.isVisible ? "Listening..." : "Inactive")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text(lyricModeManager.isVisible ? "Listening Active" : "Ready to Start")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
             }
             
-            if whisperState.availableModels.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                    Text("No local models available. Please download a model first.")
-                        .font(.caption)
-                        .foregroundColor(.orange)
+            Spacer()
+            
+            if lyricModeManager.isVisible {
+                Button(action: { lyricModeManager.clear() }) {
+                    Label("Clear Text", systemImage: "trash")
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
             }
+            
+            Button(action: toggleLyricMode) {
+                HStack(spacing: 8) {
+                    if isStarting {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                            .frame(width: 16, height: 16)
+                            .colorInvert()
+                    } else {
+                        Image(systemName: lyricModeManager.isVisible ? "stop.fill" : "play.fill")
+                    }
+                    Text(lyricModeManager.isVisible ? "Stop Recording" : "Start Recording")
+                        .fontWeight(.semibold)
+                }
+                .frame(minWidth: 160)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .tint(lyricModeManager.isVisible ? .red : .accentColor)
+            .disabled(isStarting || (settings.engineType == .whisper && selectedModel == nil))
         }
+        .padding(24)
+        .background(.regularMaterial)
+        .overlay(Divider().frame(maxWidth: .infinity, maxHeight: 1), alignment: .top)
     }
     
-    // MARK: - Transcription Settings Section
+    // MARK: - Transcription Settings
     
     /// The currently selected model for Lyrics mode
     private var selectedModel: WhisperModel? {
@@ -187,481 +200,274 @@ struct LyricModeSettingsView: View {
         ]
     }
     
-    private var transcriptionSettingsSection: some View {
+    @ViewBuilder
+    private var engineSpecificSettings: some View {
+        switch settings.engineType {
+        case .whisper:
+            whisperSettings
+        case .cloud:
+            cloudSettings
+        case .appleSpeech:
+            appleSpeechSettings
+        case .whisperKit:
+            WhisperKitSettingsSection(settings: settings)
+        case .teamsLiveCaptions:
+            teamsLiveCaptionsSettings
+        }
+    }
+    
+    private var whisperSettings: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Transcription Settings")
-                .font(.headline)
-            
-            // Engine Type Picker
-            VStack(spacing: 12) {
-                HStack {
-                    Label("Engine", systemImage: "gearshape.2")
-                        .foregroundColor(.primary)
-                        .frame(width: 120, alignment: .leading)
-                    
-                    Spacer()
-                    
-                    Picker("Engine", selection: $settings.engineType) {
-                        ForEach(LyricModeEngineType.allCases) { type in
-                            Label(type.rawValue, systemImage: type.icon).tag(type)
-                        }
+            // Model Selection
+            CustomPicker("Model", selection: $settings.selectedModelName) {
+                if whisperState.availableModels.isEmpty {
+                    Text("No models available").tag("")
+                } else {
+                    ForEach(whisperState.availableModels, id: \.name) { model in
+                        Text(model.name).tag(model.name)
                     }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .frame(maxWidth: 200)
                 }
-                
-                Text(settings.engineType.description)
+            }
+            .onAppear {
+                if settings.selectedModelName.isEmpty, let first = whisperState.availableModels.first {
+                    settings.selectedModelName = first.name
+                }
+            }
+            
+            Divider()
+            
+            // Audio Input
+            CustomPicker("Microphone", selection: $settings.selectedAudioDeviceUID) {
+                Text("System Default").tag("")
+                ForEach(audioDeviceManager.availableDevices, id: \.uid) { device in
+                    Text(device.name).tag(device.uid)
+                }
+            }
+            
+            Divider()
+            
+            // Language
+            CustomPicker("Language", selection: $settings.selectedLanguage) {
+                ForEach(availableLanguages, id: \.code) { language in
+                    Text(language.name).tag(language.code)
+                }
+            }
+            
+            Divider()
+            
+            // Advanced Toggle
+            DisclosureGroup("Advanced Parameters") {
+                VStack(spacing: 16) {
+                    CustomSlider(
+                        label: "Temperature",
+                        value: $settings.temperature,
+                        range: 0.0...1.0,
+                        step: 0.05,
+                        format: "%.2f"
+                    )
+                    
+                    CustomSlider(
+                        label: "Soft Timeout",
+                        value: $settings.softTimeout,
+                        range: 0.3...3.0,
+                        step: 0.1,
+                        format: "%.1fs"
+                    )
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Context Prompt")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        TextField("Technical terms, names...", text: $settings.whisperPrompt)
+                            .textFieldStyle(PlainTextFieldStyle())
+                            .padding(8)
+                            .background(Color(NSColor.controlBackgroundColor))
+                            .cornerRadius(6)
+                    }
+                }
+                .padding(.top, 16)
+            }
+            .font(.subheadline)
+            .foregroundColor(.secondary)
+        }
+    }
+    
+    private var cloudSettings: some View {
+        VStack(spacing: 20) {
+            let verifiedCloudModels = whisperState.usableModels.filter {
+                [.groq, .deepgram, .elevenLabs, .mistral, .gemini, .soniox, .custom].contains($0.provider)
+            }
+            
+            if verifiedCloudModels.isEmpty {
+                Text("No verified cloud models available. Please configure them in settings.")
                     .font(.caption)
                     .foregroundColor(.secondary)
-            }
-            .padding()
-            .background(Color(NSColor.controlBackgroundColor))
-            .cornerRadius(8)
-            
-            // Model & Audio Input Group
-            VStack(spacing: 12) {
-                // Model Row - conditional based on engine type
-                if settings.engineType == .whisper {
-                    HStack {
-                        Label("Model", systemImage: "cpu")
-                            .foregroundColor(.primary)
-                            .frame(width: 120, alignment: .leading)
-                        
-                        Spacer()
-                        
-                        if whisperState.availableModels.isEmpty {
-                            Text("No models")
-                                .foregroundColor(.secondary)
-                        } else {
-                            Picker("Model", selection: $settings.selectedModelName) {
-                                ForEach(whisperState.availableModels, id: \.name) { model in
-                                    Text(model.name).tag(model.name)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                            .frame(maxWidth: 200)
-                            .onAppear {
-                                if settings.selectedModelName.isEmpty, let first = whisperState.availableModels.first {
-                                    settings.selectedModelName = first.name
-                                }
-                            }
-                        }
-                    }
-                } else if settings.engineType == .cloud {
-                    HStack {
-                        Label("Cloud Model", systemImage: "cloud")
-                            .foregroundColor(.primary)
-                            .frame(width: 120, alignment: .leading)
-                        
-                        Spacer()
-                        
-                        let verifiedCloudModels = whisperState.usableModels.filter { 
-                            [.groq, .deepgram, .elevenLabs, .mistral, .gemini, .soniox, .custom].contains($0.provider)
-                        }
-                        
-                        if verifiedCloudModels.isEmpty {
-                            Text("No verified models")
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-                        } else {
-                            Picker("Cloud Model", selection: $settings.selectedCloudModelName) {
-                                ForEach(verifiedCloudModels, id: \.name) { model in
-                                    Text(model.displayName).tag(model.name)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                            .frame(maxWidth: 200)
-                            .onAppear {
-                                if settings.selectedCloudModelName.isEmpty, let first = verifiedCloudModels.first {
-                                    settings.selectedCloudModelName = first.name
-                                }
-                            }
-                        }
-                    }
-                } else if settings.engineType == .appleSpeech {
-                    // Apple Speech settings
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Label("Model", systemImage: "apple.logo")
-                                .foregroundColor(.primary)
-                                .frame(width: 120, alignment: .leading)
-                            
-                            Spacer()
-                            
-                            Text("Apple Speech Recognition")
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        if #available(macOS 26, *) {
-                            Divider()
-                            
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Recognition Mode")
-                                
-                                Picker("Recognition Mode", selection: $settings.appleSpeechMode) {
-                                    ForEach(LyricModeSettings.AppleSpeechMode.allCases) { mode in
-                                        Text(mode.rawValue).tag(mode)
-                                    }
-                                }
-                                .pickerStyle(.segmented)
-                                .labelsHidden()
-                                
-                                Text(settings.appleSpeechMode.description)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-                } else if settings.engineType == .teamsLiveCaptions {
-                    // Teams Live Captions settings
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Label("Source", systemImage: "person.2.wave.2")
-                                .foregroundColor(.primary)
-                                .frame(width: 120, alignment: .leading)
-                            
-                            Spacer()
-                            
-                            Text("Microsoft Teams Live Captions")
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Divider()
-                        
-                        // Accessibility Permission Status
-                        HStack {
-                            if TeamsLiveCaptionsService.isAccessibilityEnabled() {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                                Text("Accessibility Permission Granted")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.orange)
-                                Text("Accessibility Permission Required")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                                
-                                Spacer()
-                                
-                                Button("Grant Permission") {
-                                    TeamsLiveCaptionsService.requestAccessibilityPermission()
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-                        }
-                        
-                        Divider()
-                        
-                        // Teams Process Picker
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Teams Window")
-                                
-                                Spacer()
-                                
-                                Button(action: {
-                                    Task {
-                                        await teamsService.refreshTeamsProcesses()
-                                    }
-                                }) {
-                                    Image(systemName: "arrow.clockwise")
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .help("Refresh Teams windows")
-                            }
-                            
-                            if teamsService.availableTeamsProcesses.isEmpty {
-                                HStack {
-                                    Image(systemName: "app.badge.checkmark")
-                                        .foregroundColor(.secondary)
-                                    Text("No Microsoft Teams processes found. Make sure Teams is running.")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            } else {
-                                Picker("Teams Window", selection: $teamsService.selectedProcessPID) {
-                                    Text("Select a Teams window").tag(nil as pid_t?)
-                                    ForEach(teamsService.availableTeamsProcesses) { process in
-                                        Text(process.displayName).tag(process.pid as pid_t?)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .labelsHidden()
-                            }
-                        }
-                        
-                        if let error = teamsService.errorMessage {
-                            HStack {
-                                Image(systemName: "exclamationmark.circle.fill")
-                                    .foregroundColor(.red)
-                                Text(error)
-                                    .font(.caption)
-                                    .foregroundColor(.red)
-                            }
-                        }
+            } else {
+                CustomPicker("Cloud Model", selection: $settings.selectedCloudModelName) {
+                    ForEach(verifiedCloudModels, id: \.name) { model in
+                        Text(model.displayName).tag(model.name)
                     }
                 }
-                
-                // Audio Input Row
+                .onAppear {
+                    if settings.selectedCloudModelName.isEmpty, let first = verifiedCloudModels.first {
+                        settings.selectedCloudModelName = first.name
+                    }
+                }
+            }
+            
+            Text("Cloud transcription requires an active internet connection and API key.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+    
+    private var appleSpeechSettings: some View {
+        VStack(spacing: 20) {
+            if #available(macOS 26, *) {
+                // Using picker directly for simplicity in custom views
                 HStack {
-                    Label("Audio Input", systemImage: "mic")
-                        .foregroundColor(.primary)
-                        .frame(width: 120, alignment: .leading)
-                    
+                    Text("Recognition Mode")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
                     Spacer()
-                    
-                    Picker("Audio Input", selection: $settings.selectedAudioDeviceUID) {
-                        Text("System Default").tag("")
-                        ForEach(audioDeviceManager.availableDevices, id: \.uid) { device in
-                            Text(device.name).tag(device.uid)
+                    Picker("", selection: $settings.appleSpeechMode) {
+                        ForEach(LyricModeSettings.AppleSpeechMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
                         }
                     }
                     .pickerStyle(.menu)
-                    .labelsHidden()
-                    .frame(maxWidth: 200)
+                    .frame(width: 200)
                 }
                 
-                // Language Row
-                HStack {
-                    Label("Language", systemImage: "globe")
-                        .foregroundColor(.primary)
-                        .frame(width: 120, alignment: .leading)
-                    
-                    Spacer()
-                    
-                    Picker("Language", selection: $settings.selectedLanguage) {
-                        ForEach(availableLanguages, id: \.code) { language in
-                            Text(language.name).tag(language.code)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .frame(maxWidth: 200)
-                }
-            }
-            .padding()
-            .background(Color(NSColor.controlBackgroundColor))
-            .cornerRadius(8)
-            
-            // Advanced Settings Group - Only for Whisper engine
-            if settings.engineType == .whisper {
-                VStack(spacing: 16) {
-                    // Temperature
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Label("Temperature", systemImage: "thermometer.medium")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Text(String(format: "%.2f", settings.temperature))
-                                .foregroundColor(.secondary)
-                                .monospacedDigit()
-                                .frame(width: 50, alignment: .trailing)
-                        }
-                        
-                        Slider(value: $settings.temperature, in: 0.0...1.0, step: 0.05)
-                        
-                        Text("Lower = deterministic, Higher = varied")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Divider()
-                    
-                    // Beam Size
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Label("Beam Size", systemImage: "arrow.triangle.branch")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Text("\(settings.beamSize)")
-                                .foregroundColor(.secondary)
-                                .monospacedDigit()
-                                .frame(width: 50, alignment: .trailing)
-                        }
-                        
-                        Picker("", selection: $settings.beamSize) {
-                            Text("1 (Fast)").tag(1)
-                            Text("2").tag(2)
-                            Text("3").tag(3)
-                            Text("5 (Quality)").tag(5)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
-                    
-                    Divider()
-                    
-                    // Soft Timeout (Pause Duration)
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Label("Soft Timeout", systemImage: "pause.circle")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Text(String(format: "%.1fs", settings.softTimeout))
-                                .foregroundColor(.secondary)
-                                .monospacedDigit()
-                                .frame(width: 50, alignment: .trailing)
-                        }
-                        
-                        Slider(value: $settings.softTimeout, in: 0.3...3.0, step: 0.1)
-                        
-                        Text("Time to wait when silence is detected")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Divider()
-                    
-                    // Hard Timeout
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Label("Hard Timeout", systemImage: "exclamationmark.circle")
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Text(String(format: "%.1fs", settings.hardTimeout))
-                                .foregroundColor(.secondary)
-                                .monospacedDigit()
-                                .frame(width: 50, alignment: .trailing)
-                        }
-                        
-                        Slider(value: $settings.hardTimeout, in: 1.0...10.0, step: 0.5)
-                        
-                        Text("Force break even with background noise")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Divider()
-                    
-                    // Whisper Prompt
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Label("Prompt", systemImage: "text.quote")
-                                .foregroundColor(.primary)
-                            Spacer()
-                        }
-                        
-                        TextField("e.g., Technical terms, names...", text: $settings.whisperPrompt)
-                            .textFieldStyle(.roundedBorder)
-                        
-                        Text("Guide transcription with context, vocabulary, or style hints")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .padding()
-                .background(Color(NSColor.controlBackgroundColor))
-                .cornerRadius(8)
+                Divider()
+                
+                Text(settings.appleSpeechMode.description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text("Standard on-device speech recognition.")
+                    .foregroundColor(.secondary)
             }
         }
     }
     
-    // MARK: - Appearance Section
-    
-    private var appearanceSection: some View {
+    private var teamsLiveCaptionsSettings: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Appearance")
-                .font(.headline)
-            
-            // Max Visible Lines
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Visible Lines")
-                    Spacer()
-                    Text("\(settings.maxVisibleLines)")
-                        .foregroundColor(.secondary)
-                        .monospacedDigit()
-                }
-                
-                Slider(
-                    value: Binding(
-                        get: { Double(settings.maxVisibleLines) },
-                        set: { settings.maxVisibleLines = Int($0) }
-                    ),
-                    in: 3...10,
-                    step: 1
-                )
-            }
-            
-            // Font Size
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Font Size")
-                    Spacer()
-                    Text("\(Int(settings.fontSize)) pt")
-                        .foregroundColor(.secondary)
-                        .monospacedDigit()
-                }
-                
-                Slider(
-                    value: $settings.fontSize,
-                    in: 12...48,
-                    step: 2
-                )
-            }
-            
-            // Background Opacity
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Background Opacity")
-                    Spacer()
-                    Text("\(Int(settings.backgroundOpacity * 100))%")
-                        .foregroundColor(.secondary)
-                        .monospacedDigit()
-                }
-                
-                Slider(
-                    value: $settings.backgroundOpacity,
-                    in: 0.3...1.0,
-                    step: 0.1
-                )
-            }
-        }
-    }
-    
-    // MARK: - Behavior Section
-    
-    private var behaviorSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Behavior")
-                .font(.headline)
-            
-            Toggle(isOn: $settings.isClickThroughEnabled) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Click-Through Mode")
-                    Text("Allow clicks to pass through the overlay to apps behind it")
+            // Permissions
+            HStack {
+                Text("Accessibility Access")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                Spacer()
+                if TeamsLiveCaptionsService.isAccessibilityEnabled() {
+                    Label("Granted", systemImage: "checkmark.circle.fill")
+                        .foregroundColor(.green)
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                } else {
+                    Button("Grant Access") {
+                        TeamsLiveCaptionsService.requestAccessibilityPermission()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
+            
+            Divider()
+            
+            // Window Selector
+            HStack {
+                Text("Target Window")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                Spacer()
+                
+                HStack {
+                    if teamsService.availableTeamsProcesses.isEmpty {
+                        Text("No Teams found").foregroundColor(.secondary).italic().font(.caption)
+                    } else {
+                        Picker("", selection: $teamsService.selectedProcessPID) {
+                            Text("Select Window").tag(nil as pid_t?)
+                            ForEach(teamsService.availableTeamsProcesses) { process in
+                                Text(process.displayName).tag(process.pid as pid_t?)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 160)
+                    }
+                    
+                    Button(action: { Task { await teamsService.refreshTeamsProcesses() } }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.accentColor)
+                }
+            }
+            
+            if let error = teamsService.errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+    }
+    
+    private var appearanceSettingsContent: some View {
+        VStack(spacing: 20) {
+            CustomSlider(
+                label: "Font Size",
+                value: $settings.fontSize,
+                range: 12...64,
+                step: 2,
+                format: "%.0f pt"
+            )
+            
+            CustomSlider(
+                label: "Visible Lines",
+                value: Binding(get: { Double(settings.maxVisibleLines) }, set: { settings.maxVisibleLines = Int($0) }),
+                range: 1...10,
+                step: 1,
+                format: "%.0f"
+            )
+            
+            CustomSlider(
+                label: "Opacity",
+                value: $settings.backgroundOpacity,
+                range: 0.1...1.0,
+                step: 0.1,
+                format: "%.0f%%",
+                displayMultiplier: 100
+            )
+        }
+    }
+    
+    private var behaviorSettingsContent: some View {
+        VStack(spacing: 16) {
+            CustomToggle(
+                title: "Click-Through",
+                subtitle: "Ignore mouse clicks on overlay",
+                isOn: $settings.isClickThroughEnabled
+            )
             .onChange(of: settings.isClickThroughEnabled) { _, newValue in
                 lyricModeManager.updateClickThrough(newValue)
             }
             
-            Toggle(isOn: $settings.showPartialHighlight) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Highlight Partial Text")
-                    Text("Show in-progress transcription in a different color")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
+            Divider()
             
-            Toggle(isOn: $settings.translateImmediately) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Translate Immediately (Live Feel)")
-                    Text("Analyze partial text and translate complete sentences instantly")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
+            CustomToggle(
+                title: "Partial Highlight",
+                subtitle: "Colorize incoming text",
+                isOn: $settings.showPartialHighlight
+            )
+            
+            Divider()
+            
+            CustomToggle(
+                title: "Live Translation",
+                subtitle: "Translate sentences instantly",
+                isOn: $settings.translateImmediately
+            )
         }
     }
     
@@ -679,39 +485,24 @@ struct LyricModeSettingsView: View {
                     switch settings.engineType {
                     case .whisper:
                         guard let model = selectedModel else { return }
-                        
-                        // Create whisper context from Lyrics-specific model
                         let context = try await WhisperContext.createContext(path: model.url.path)
-                        
-                        // Set language override for Lyrics mode
                         let language = settings.selectedLanguage == "auto" ? nil : settings.selectedLanguage
                         await context.setLanguageOverride(language)
-                        
-                        // Set temperature and beam size overrides
                         await context.setTemperatureOverride(Float(settings.temperature))
-                        if settings.beamSize > 1 {
-                            await context.setBeamSizeOverride(Int32(settings.beamSize))
-                        }
-                        
-                        // Set whisper prompt if provided
-                        if !settings.whisperPrompt.isEmpty {
-                            await context.setPrompt(settings.whisperPrompt)
-                        }
-                        
+                        if settings.beamSize > 1 { await context.setBeamSizeOverride(Int32(settings.beamSize)) }
+                        if !settings.whisperPrompt.isEmpty { await context.setPrompt(settings.whisperPrompt) }
                         try await lyricModeManager.show(with: context)
                         
                     case .appleSpeech:
                         try await lyricModeManager.showWithAppleSpeech()
                         
+                    case .whisperKit:
+                        print("Starting WhisperKit transcription...")
+                        
                     case .cloud:
-                        // Cloud models use the same Whisper infrastructure but with cloud transcription
-                        // For now, show an alert that cloud is not yet supported in Lyric Mode
-                        // TODO: Implement cloud streaming when API supports it
-                        print("Cloud transcription in Lyric Mode not yet implemented")
+                        print("Cloud transcription not yet implemented")
                         
                     case .teamsLiveCaptions:
-                        // Teams Live Captions just need the service to start
-                        // The overlay uses the same window manager infrastructure
                         print("Starting Teams Live Captions...")
                     }
                 }
@@ -722,9 +513,360 @@ struct LyricModeSettingsView: View {
     }
 }
 
-// MARK: - Preview
+// MARK: - Components
 
-// Preview requires a WhisperState with proper ModelContext, so we skip the live preview
-// #Preview {
-//     LyricModeSettingsView(...)
-// }
+struct SettingsCard<Content: View>: View {
+    var title: String? = nil
+    var icon: String? = nil
+    var content: Content
+    
+    init(title: String? = nil, icon: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.content = content()
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let title = title {
+                HStack(spacing: 8) {
+                    if let icon = icon {
+                        Image(systemName: icon)
+                            .foregroundColor(.accentColor)
+                    }
+                    Text(title)
+                        .font(.headline)
+                }
+                .padding(.bottom, 4)
+            }
+            
+            content
+        }
+        .padding(20)
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+    }
+}
+
+struct EngineSelectionCard: View {
+    let type: LyricModeEngineType
+    let isSelected: Bool
+    let action: () -> Void
+    
+    @State private var isHovering = false
+    
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: type.icon)
+                        .font(.title2)
+                        .foregroundColor(isSelected ? .white : .accentColor)
+                    
+                    Spacer()
+                    
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.white)
+                    }
+                }
+                
+                Spacer()
+                
+                Text(type.rawValue)
+                    .font(.headline)
+                    .foregroundColor(isSelected ? .white : .primary)
+                
+                Text(type.description)
+                    .font(.caption2)
+                    .foregroundColor(isSelected ? .white.opacity(0.8) : .secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+            .frame(width: 160, height: 140)
+            .background(
+                ZStack {
+                    if isSelected {
+                        Color.accentColor
+                    } else {
+                        Color(NSColor.controlBackgroundColor)
+                    }
+                }
+            )
+            .cornerRadius(16)
+            .shadow(
+                color: isSelected ? Color.accentColor.opacity(0.3) : Color.black.opacity(0.05),
+                radius: isHovering ? 8 : 4,
+                y: isHovering ? 4 : 2
+            )
+            .scaleEffect(isHovering ? 1.02 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovering)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+    }
+}
+
+struct LyricPreviewView: View {
+    @ObservedObject var settings: LyricModeSettings
+    
+    var body: some View {
+        ZStack {
+            // Background
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.black.opacity(settings.backgroundOpacity))
+                .shadow(radius: 10)
+            
+            // Content
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Simulated previous line")
+                    .foregroundColor(.white.opacity(0.6))
+                
+                Text("This is how your text will look")
+                    .foregroundColor(.white)
+                    .fontWeight(.bold)
+                
+                Text("Real-time transcription preview")
+                    .foregroundColor(settings.showPartialHighlight ? .cyan : .white.opacity(0.8))
+            }
+            .font(.system(size: settings.fontSize * 0.8)) // Scale down slightly for preview fits
+            .padding(20)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+struct CustomSlider: View {
+    let label: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let format: String
+    var displayMultiplier: Double = 1.0
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(label)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text(String(format: format, value * displayMultiplier))
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .monospacedDigit()
+            }
+            
+            Slider(value: $value, in: range, step: step)
+                .tint(.accentColor)
+        }
+    }
+}
+
+struct CustomPicker<Content: View>: View {
+    let label: String
+    @Binding var selection: String
+    let content: Content
+    
+    init(_ label: String, selection: Binding<String>, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self._selection = selection
+        self.content = content()
+    }
+    
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Spacer()
+            Picker("", selection: $selection) {
+                content
+            }
+            .pickerStyle(.menu)
+            .frame(width: 200)
+        }
+    }
+}
+
+struct CustomToggle: View {
+    let title: String
+    let subtitle: String?
+    @Binding var isOn: Bool
+    
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                if let subtitle = subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .toggleStyle(SwitchToggleStyle(tint: .accentColor))
+    }
+}
+
+// MARK: - WhisperKit Settings (Preserved functionality)
+
+struct WhisperKitSettingsSection: View {
+    @ObservedObject var settings: LyricModeSettings
+    @StateObject private var modelManager = WhisperKitModelManager.shared
+    @State private var showingDeleteConfirmation = false
+    @State private var modelToDelete: WhisperKitModelInfo?
+    @State private var selectedTab = 0
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header Action
+            HStack {
+                Text("Model Manager")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                Spacer()
+                
+                Button(action: { Task { await modelManager.fetchAvailableModels(from: settings.whisperKitModelRepo) } }) {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(modelManager.isLoadingModels)
+            }
+            
+            // Tab Picker
+            Picker("", selection: $selectedTab) {
+                Text("Downloaded (\(modelManager.downloadedModels.count))").tag(0)
+                Text("Available").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: selectedTab) { _, newValue in
+                if newValue == 1 && modelManager.availableModels.isEmpty {
+                    Task { await modelManager.fetchAvailableModels(from: settings.whisperKitModelRepo) }
+                }
+            }
+            
+            // Content
+            Group {
+                if selectedTab == 0 {
+                    downloadedModelsList
+                } else {
+                    availableModelsList
+                }
+            }
+            .frame(height: 200)
+            .background(Color(NSColor.textBackgroundColor))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.secondary.opacity(0.1), lineWidth: 1)
+            )
+            
+            if let error = modelManager.errorMessage {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+                    Text(error).font(.caption).foregroundColor(.orange)
+                    Spacer()
+                    Button("Dismiss") { modelManager.errorMessage = nil }.font(.caption)
+                }
+            }
+        }
+        .onAppear { modelManager.loadDownloadedModels() }
+        .alert("Delete Model?", isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                if let model = modelToDelete {
+                    modelManager.deleteModel(model.name)
+                    if settings.selectedWhisperKitModel == model.name { settings.selectedWhisperKitModel = "" }
+                }
+            }
+        } message: {
+            if let model = modelToDelete {
+                Text("Delete \(model.name)? Frees \(model.sizeString).")
+            }
+        }
+    }
+    
+    private var downloadedModelsList: some View {
+        VStack {
+            if modelManager.downloadedModels.isEmpty {
+                ContentUnavailableView("No Models Downloaded", systemImage: "tray", description: Text("Download a model from the Available tab"))
+            } else {
+                List(selection: $settings.selectedWhisperKitModel) {
+                    ForEach(modelManager.downloadedModels) { model in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                HStack {
+                                    Text(model.name).fontWeight(.medium)
+                                    if model.isRecommended { Image(systemName: "star.fill").foregroundColor(.yellow).font(.caption) }
+                                }
+                                Text(model.sizeString).font(.caption).foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            if settings.selectedWhisperKitModel == model.name {
+                                Image(systemName: "checkmark").foregroundColor(.accentColor)
+                            }
+                            Button(action: { modelToDelete = model; showingDeleteConfirmation = true }) {
+                                Image(systemName: "trash").foregroundColor(.red)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .tag(model.name)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            settings.selectedWhisperKitModel = model.name
+                        }
+                    }
+                }
+                .listStyle(.plain)
+            }
+        }
+    }
+    
+    private var availableModelsList: some View {
+        VStack {
+            if modelManager.isLoadingModels {
+                ProgressView("Loading available models...")
+            } else if modelManager.availableModels.isEmpty {
+                ContentUnavailableView("No Connection", systemImage: "wifi.slash", description: Text("Could not fetch models"))
+            } else {
+                List {
+                    ForEach(modelManager.availableModels, id: \.self) { modelName in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(modelName).fontWeight(.medium)
+                                if modelName == modelManager.recommendedModel {
+                                    Text("Recommended").font(.caption).foregroundColor(.green)
+                                }
+                            }
+                            Spacer()
+                            
+                            if modelManager.isModelDownloaded(modelName) {
+                                Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                            } else if modelManager.downloadingModels.contains(modelName) {
+                                ProgressView().scaleEffect(0.5)
+                            } else {
+                                Button("Get") {
+                                    Task { try? await modelManager.downloadModel(modelName, from: settings.whisperKitModelRepo) }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .listStyle(.plain)
+            }
+        }
+    }
+}

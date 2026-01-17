@@ -3,6 +3,7 @@ import SwiftUI
 /// Transcription engine types for Lyric Mode
 enum LyricModeEngineType: String, CaseIterable, Identifiable {
     case whisper = "Whisper"
+    case whisperKit = "WhisperKit"
     case appleSpeech = "Apple Speech"
     case cloud = "Cloud"
     case teamsLiveCaptions = "Teams Live Captions"
@@ -12,7 +13,9 @@ enum LyricModeEngineType: String, CaseIterable, Identifiable {
     var description: String {
         switch self {
         case .whisper:
-            return "Local Whisper model (most accurate)"
+            return "Local Whisper model (whisper.cpp)"
+        case .whisperKit:
+            return "WhisperKit - CoreML optimized (recommended for Apple Silicon)"
         case .appleSpeech:
             return "Apple's built-in speech recognition (no download)"
         case .cloud:
@@ -26,6 +29,8 @@ enum LyricModeEngineType: String, CaseIterable, Identifiable {
         switch self {
         case .whisper:
             return "waveform"
+        case .whisperKit:
+            return "brain.head.profile"
         case .appleSpeech:
             return "apple.logo"
         case .cloud:
@@ -67,6 +72,10 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.hardTimeout") var hardTimeout: Double = 2.0
     @AppStorage("lyricMode.selectedAudioDeviceUID") var selectedAudioDeviceUID: String = ""
     @AppStorage("lyricMode.whisperPrompt") var whisperPrompt: String = ""
+    
+    // WhisperKit specific settings
+    @AppStorage("lyricMode.selectedWhisperKitModel") var selectedWhisperKitModel: String = ""
+    @AppStorage("lyricMode.whisperKitModelRepo") var whisperKitModelRepo: String = "argmaxinc/whisperkit-coreml"
     
     // AI Provider settings (for future AI features in Lyric Mode)
     @AppStorage("lyricMode.aiProvider") var aiProviderRaw: String = "ollama"

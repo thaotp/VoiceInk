@@ -29,6 +29,7 @@ final class LyricModeWindowManager: ObservableObject {
     private var transcriptionEngine: RealtimeTranscriptionEngine?
     private var appleSpeechService: AppleSpeechRealtimeService?
     private var teamsLiveCaptionsService: TeamsLiveCaptionsService?
+    private var whisperKitService: WhisperKitRealtimeService?
     private var whisperContext: WhisperContext?
     private var cancellables = Set<AnyCancellable>()
     private var deviceChangeWorkItem: DispatchWorkItem?
@@ -205,6 +206,29 @@ final class LyricModeWindowManager: ObservableObject {
             // Cloud not implemented for real-time yet
             throw NSError(domain: "LyricMode", code: 2, userInfo: [NSLocalizedDescriptionKey: "Cloud engine not supported for real-time"])
             
+        case .whisperKit:
+            // Create WhisperKit service
+            let whisperKitSvc = WhisperKitRealtimeService()
+            whisperKitService = whisperKitSvc
+            
+            // Set language
+            whisperKitSvc.setLanguage(settings.selectedLanguage)
+            
+            // Load model if needed
+            if !whisperKitSvc.isModelLoaded {
+                let modelName = settings.selectedWhisperKitModel.isEmpty
+                    ? await whisperKitSvc.getRecommendedModel() ?? "tiny"
+                    : settings.selectedWhisperKitModel
+                
+                try await whisperKitSvc.loadModel(modelName, from: settings.whisperKitModelRepo)
+            }
+            
+            // Subscribe to WhisperKit updates
+            subscribeToWhisperKitTranscription(service: whisperKitSvc)
+            
+            // Start listening
+            try await whisperKitSvc.startListening()
+            
         case .teamsLiveCaptions:
             // Create Teams Live Captions service
             let teamsService = TeamsLiveCaptionsService()
@@ -244,6 +268,9 @@ final class LyricModeWindowManager: ObservableObject {
         teamsLiveCaptionsService?.stopReading()
         teamsLiveCaptionsService = nil
         
+        whisperKitService?.stopListening()
+        whisperKitService = nil
+        
         // Clear transcript data to prevent stale state
         transcriptSegments = []
         
@@ -264,6 +291,7 @@ final class LyricModeWindowManager: ObservableObject {
         transcriptionEngine?.pause()
         appleSpeechService?.pause()
         teamsLiveCaptionsService?.pauseReading() // Use pause instead of stop to preserve data
+        whisperKitService?.pause()
         stopTimer()
     }
     
@@ -272,6 +300,7 @@ final class LyricModeWindowManager: ObservableObject {
         transcriptionEngine?.resume()
         appleSpeechService?.resume()
         teamsLiveCaptionsService?.resumeReading() // Use resume to preserve data
+        whisperKitService?.resume()
         startTimer()
     }
     
@@ -403,10 +432,35 @@ final class LyricModeWindowManager: ObservableObject {
             .store(in: &cancellables)
     }
     
+    private func subscribeToWhisperKitTranscription(service: WhisperKitRealtimeService) {
+        var publishedForTranslation: Set<String> = []
+        
+        service.transcriptionPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] text in
+                guard let self = self else { return }
+                
+                // Only publish if not already sent for translation
+                if !publishedForTranslation.contains(text) {
+                    publishedForTranslation.insert(text)
+                    self.transcriptionPublisher.send(text)
+                }
+            }
+            .store(in: &cancellables)
+        
+        service.$partialTranscript
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] text in
+                self?.partialTranscriptionPublisher.send(text)
+            }
+            .store(in: &cancellables)
+    }
+    
     func clear() {
         transcriptionEngine?.clear()
         appleSpeechService?.clear()
         teamsLiveCaptionsService?.clear()
+        whisperKitService?.clear()
         
         // Destroy old overlay so a fresh one is created on next show
         deinitializeWindow()

@@ -1321,6 +1321,8 @@ struct LyricModeSettingsPopup: View {
                 switch localEngineType {
                 case .whisper:
                     whisperConfigSection
+                case .whisperKit:
+                    whisperKitConfigSection
                 case .appleSpeech:
                     appleSpeechConfigSection
                 case .cloud:
@@ -1383,9 +1385,185 @@ struct LyricModeSettingsPopup: View {
         }
     }
     
+    // MARK: - WhisperKit Config
+    
+    private var whisperKitConfigSection: some View {
+        WhisperKitQuickSetupView(settings: settings)
+    }
+}
+
+// MARK: - WhisperKit Quick Setup View
+
+struct WhisperKitQuickSetupView: View {
+    @ObservedObject var settings: LyricModeSettings
+    @StateObject private var modelManager = WhisperKitModelManager.shared
+    @State private var showingDeleteConfirmation = false
+    
+    // Combined list of all unique models (downloaded + available)
+    private var allModels: [String] {
+        let downloadedNames = Set(modelManager.downloadedModels.map { $0.name })
+        let availableNames = Set(modelManager.availableModels)
+        var models = Array(downloadedNames)
+        models.append(contentsOf: availableNames.subtracting(downloadedNames))
+        
+        return models.sorted { name1, name2 in
+            if name1 == modelManager.recommendedModel { return true }
+            if name2 == modelManager.recommendedModel { return false }
+            return name1 < name2
+        }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Header Row: Label + Spacer + Picker
+            HStack {
+                Text("WhisperKit Model")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                Spacer()
+                
+                if modelManager.isLoadingModels && modelManager.availableModels.isEmpty {
+                    ProgressView().scaleEffect(0.6)
+                } else {
+                    Picker("Model", selection: $settings.selectedWhisperKitModel) {
+                        if settings.selectedWhisperKitModel.isEmpty {
+                            Text("Select a model").tag("")
+                        }
+                        
+                        ForEach(allModels, id: \.self) { modelName in
+                            HStack {
+                                Text(modelName)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text(estimateSize(modelName))
+                                    .foregroundColor(.secondary)
+                                if modelManager.isModelDownloaded(modelName) {
+                                    Image(systemName: "checkmark.circle")
+                                } else if modelName == modelManager.recommendedModel {
+                                    Image(systemName: "star.fill")
+                                }
+                            }
+                            .tag(modelName)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 220)
+                }
+            }
+            
+            // Dynamic Action Button (Full width)
+            if !settings.selectedWhisperKitModel.isEmpty {
+                actionButtonForSelectedModel
+            } else if let recommended = modelManager.recommendedModel, 
+                      !modelManager.isModelDownloaded(recommended) {
+                 // Suggestion if nothing selected
+                 Button(action: {
+                     Task { try? await modelManager.downloadModel(recommended, from: settings.whisperKitModelRepo) }
+                 }) {
+                     HStack {
+                         Text("Recommended: \(recommended)")
+                         Spacer()
+                         Image(systemName: "arrow.down.circle")
+                     }
+                 }
+                 .buttonStyle(.plain)
+                 .font(.caption)
+                 .foregroundColor(.accentColor)
+                 .padding(.vertical, 4)
+            }
+            
+            // Error Message
+            if let error = modelManager.errorMessage {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                    Spacer()
+                    Button("Dismiss") { modelManager.errorMessage = nil }
+                        .font(.caption)
+                }
+            }
+        }
+        .onAppear {
+            modelManager.loadDownloadedModels()
+            if modelManager.availableModels.isEmpty {
+                Task { await modelManager.fetchAvailableModels(from: settings.whisperKitModelRepo) }
+            }
+        }
+        .alert("Delete Model?", isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                modelManager.deleteModel(settings.selectedWhisperKitModel)
+            }
+        } message: {
+            Text("Are you sure you want to delete '\(settings.selectedWhisperKitModel)'?")
+        }
+    }
+    
+    @ViewBuilder
+    private var actionButtonForSelectedModel: some View {
+        let selectedModel = settings.selectedWhisperKitModel
+        let isDownloaded = modelManager.isModelDownloaded(selectedModel)
+        let isDownloading = modelManager.downloadingModels.contains(selectedModel)
+        
+        if isDownloading {
+            HStack {
+                ProgressView().scaleEffect(0.6)
+                Text("Downloading... \(Int((modelManager.downloadProgress[selectedModel] ?? 0) * 100))%")
+                    .foregroundColor(.secondary)
+            }
+            .font(.caption)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(Color.secondary.opacity(0.1))
+            .cornerRadius(6)
+        } else if isDownloaded {
+            Button(action: { showingDeleteConfirmation = true }) {
+                HStack {
+                    Image(systemName: "trash")
+                    Text("Remove Model")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .controlSize(.regular)
+        } else {
+            Button(action: {
+                Task {
+                    try? await modelManager.downloadModel(selectedModel, from: settings.whisperKitModelRepo)
+                }
+            }) {
+                HStack {
+                    Image(systemName: "arrow.down.circle.fill")
+                    Text("Download \(estimateSize(selectedModel))")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+        }
+    }
+    
+    private func estimateSize(_ name: String) -> String {
+        if name.contains("large") { return "~3 GB" }
+        else if name.contains("medium") { return "~1.5 GB" }
+        else if name.contains("small") { return "~500 MB" }
+        else if name.contains("base") { return "~150 MB" }
+        else if name.contains("tiny") { return "~75 MB" }
+        return ""
+    }
+}
+
+// MARK: - LyricModeSettingsPopup Additional Views
+
+extension LyricModeSettingsPopup {
     // MARK: - Apple Speech Config
     
-    private var appleSpeechConfigSection: some View {
+    var appleSpeechConfigSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             if #available(macOS 26, *) {
                 Text("Recognition Mode")
