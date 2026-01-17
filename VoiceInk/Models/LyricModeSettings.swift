@@ -94,6 +94,7 @@ class LyricModeSettings: ObservableObject {
     
     // Apple Speech specific settings
     @AppStorage("lyricMode.appleSpeechMode") var appleSpeechModeRaw: String = AppleSpeechMode.standard.rawValue
+    @AppStorage("lyricMode.speakerDiarizationEnabled") var speakerDiarizationEnabled: Bool = false
     
     var appleSpeechMode: AppleSpeechMode {
         get { AppleSpeechMode(rawValue: appleSpeechModeRaw) ?? .standard }

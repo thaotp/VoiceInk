@@ -30,6 +30,7 @@ final class LyricModeWindowManager: ObservableObject {
     private var appleSpeechService: AppleSpeechRealtimeService?
     private var teamsLiveCaptionsService: TeamsLiveCaptionsService?
     private var whisperKitService: WhisperKitRealtimeService?
+    private var diarizedOrchestrator: DiarizedTranscriberOrchestrator?
     private var whisperContext: WhisperContext?
     private var cancellables = Set<AnyCancellable>()
     private var deviceChangeWorkItem: DispatchWorkItem?
@@ -193,14 +194,27 @@ final class LyricModeWindowManager: ObservableObject {
             try await engine.start(with: context)
             
         case .appleSpeech:
-            let speechService = AppleSpeechRealtimeService()
-            speechService.setLanguage(settings.selectedLanguage)
-            appleSpeechService = speechService
-            
-            // Subscribe to Apple Speech updates
-            subscribeToAppleSpeechTranscription(service: speechService)
-            
-            try await speechService.startListening()
+            if settings.speakerDiarizationEnabled {
+                // Use diarized transcription with speaker labels
+                let orchestrator = DiarizedTranscriberOrchestrator.withEnergyBasedDiarization()
+                orchestrator.setLanguage(settings.selectedLanguage)
+                diarizedOrchestrator = orchestrator
+                
+                // Subscribe to diarization updates
+                subscribeToDiarizedTranscription(orchestrator: orchestrator)
+                
+                try await orchestrator.start()
+            } else {
+                // Standard Apple Speech without diarization
+                let speechService = AppleSpeechRealtimeService()
+                speechService.setLanguage(settings.selectedLanguage)
+                appleSpeechService = speechService
+                
+                // Subscribe to Apple Speech updates
+                subscribeToAppleSpeechTranscription(service: speechService)
+                
+                try await speechService.startListening()
+            }
             
         case .cloud:
             // Cloud not implemented for real-time yet
@@ -270,6 +284,10 @@ final class LyricModeWindowManager: ObservableObject {
         
         whisperKitService?.stopListening()
         whisperKitService = nil
+        
+        // Stop diarized orchestrator
+        diarizedOrchestrator?.stop()
+        diarizedOrchestrator = nil
         
         // Clear transcript data to prevent stale state
         transcriptSegments = []
@@ -372,6 +390,37 @@ final class LyricModeWindowManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] text in
                 self?.partialTranscriptionPublisher.send(text)
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func subscribeToDiarizedTranscription(orchestrator: DiarizedTranscriberOrchestrator) {
+        var publishedForTranslation: Set<String> = []
+        
+        // Subscribe to segment changes (using Combine for @Published)
+        orchestrator.$segments
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] segments in
+                guard let self = self else { return }
+                
+                print("[WindowManager] Received \(segments.count) diarized segments")
+                
+                // Convert segments to string format with speaker labels
+                let newSegments = segments.map { segment -> String in
+                    let speakerPrefix = segment.speaker.displayName
+                    return "[\(speakerPrefix)]: \(segment.text)"
+                }
+                
+                // Update transcript segments
+                self.transcriptSegments = newSegments
+                
+                print("[WindowManager] Updated transcriptSegments to \(newSegments.count) items")
+                
+                // Publish new segments for translation
+                if let lastSegment = newSegments.last, !publishedForTranslation.contains(lastSegment) {
+                    publishedForTranslation.insert(lastSegment)
+                    self.transcriptionPublisher.send(lastSegment)
+                }
             }
             .store(in: &cancellables)
     }

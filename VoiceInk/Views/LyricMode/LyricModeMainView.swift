@@ -1106,6 +1106,7 @@ struct LyricModeSettingsPopup: View {
     @State private var localAppleSpeechMode: LyricModeSettings.AppleSpeechMode = .standard
     @State private var localBackgroundOpacity: Double = 0.8
     @State private var localIsClickThroughEnabled: Bool = false
+    @State private var localSpeakerDiarizationEnabled: Bool = false
     
     // AI Provider state
     @State private var localAIProvider: String = "ollama"
@@ -1186,6 +1187,9 @@ struct LyricModeSettingsPopup: View {
             
             // Sentence continuity
             localSentenceContinuityEnabled = settings.sentenceContinuityEnabled
+            
+            // Speaker diarization
+            localSpeakerDiarizationEnabled = settings.speakerDiarizationEnabled
         }
     }
     
@@ -1207,7 +1211,8 @@ struct LyricModeSettingsPopup: View {
         localTranslationEnabled != settings.translationEnabled ||
         localTargetLanguage != settings.targetLanguage ||
         localTranslateImmediately != settings.translateImmediately ||
-        localSentenceContinuityEnabled != settings.sentenceContinuityEnabled
+        localSentenceContinuityEnabled != settings.sentenceContinuityEnabled ||
+        localSpeakerDiarizationEnabled != settings.speakerDiarizationEnabled
     }
     
     private func applySettingsAndDismiss() {
@@ -1241,6 +1246,9 @@ struct LyricModeSettingsPopup: View {
         
         // Sentence continuity setting
         settings.sentenceContinuityEnabled = localSentenceContinuityEnabled
+        
+        // Speaker diarization setting
+        settings.speakerDiarizationEnabled = localSpeakerDiarizationEnabled
         
         // Notify about changes that need recording restart
         onSettingsApplied?(audioDeviceChanged, engineChanged)
@@ -1581,6 +1589,20 @@ extension LyricModeSettingsPopup {
                 Text(localAppleSpeechMode.description)
                     .font(.caption)
                     .foregroundColor(.secondary)
+                
+                Divider()
+                
+                // Speaker Diarization Toggle
+                Toggle(isOn: $localSpeakerDiarizationEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Speaker Diarization")
+                            .font(.subheadline)
+                        Text("Identify different speakers (experimental)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
             } else {
                 Text("Using SFSpeechRecognizer")
                     .font(.caption)

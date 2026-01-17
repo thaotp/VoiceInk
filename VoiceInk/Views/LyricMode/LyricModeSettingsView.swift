@@ -342,6 +342,15 @@ struct LyricModeSettingsView: View {
                 
                 Divider()
                 
+                // Speaker Diarization Toggle
+                CustomToggle(
+                    title: "Speaker Diarization",
+                    subtitle: "Identify and label different speakers (experimental)",
+                    isOn: $settings.speakerDiarizationEnabled
+                )
+                
+                Divider()
+                
                 Text(settings.appleSpeechMode.description)
                     .font(.caption)
                     .foregroundColor(.secondary)
