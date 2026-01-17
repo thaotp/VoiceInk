@@ -173,6 +173,20 @@ final class DiarizedTranscriberOrchestrator: ObservableObject {
         logger.info("Diarized transcription stopped")
     }
     
+    /// Pause transcription (stops audio engine but keeps state)
+    func pause() {
+        guard isProcessing else { return }
+        logger.info("Pausing diarized transcription")
+        audioEngine?.pause()
+    }
+    
+    /// Resume transcription after pause
+    func resume() {
+        guard isProcessing else { return }
+        logger.info("Resuming diarized transcription")
+        try? audioEngine?.start()
+    }
+    
     /// Clear all segments
     func clear() async {
         segments.removeAll()

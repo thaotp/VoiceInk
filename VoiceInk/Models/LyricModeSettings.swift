@@ -2,42 +2,16 @@ import SwiftUI
 
 /// Transcription engine types for Lyric Mode
 enum LyricModeEngineType: String, CaseIterable, Identifiable {
-    case whisper = "Whisper"
-    case whisperKit = "WhisperKit"
     case appleSpeech = "Apple Speech"
-    case cloud = "Cloud"
-    case teamsLiveCaptions = "Teams Live Captions"
     
     var id: String { rawValue }
     
     var description: String {
-        switch self {
-        case .whisper:
-            return "Local Whisper model (whisper.cpp)"
-        case .whisperKit:
-            return "WhisperKit - CoreML optimized (recommended for Apple Silicon)"
-        case .appleSpeech:
-            return "Apple's built-in speech recognition (no download)"
-        case .cloud:
-            return "Cloud transcription (requires API key)"
-        case .teamsLiveCaptions:
-            return "Read Live Captions from Microsoft Teams meetings"
-        }
+        return "Apple's built-in speech recognition"
     }
     
     var icon: String {
-        switch self {
-        case .whisper:
-            return "waveform"
-        case .whisperKit:
-            return "brain.head.profile"
-        case .appleSpeech:
-            return "apple.logo"
-        case .cloud:
-            return "cloud"
-        case .teamsLiveCaptions:
-            return "person.2.wave.2"
-        }
+        return "apple.logo"
     }
 }
 
@@ -50,11 +24,11 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.showPartialHighlight") var showPartialHighlight: Bool = true
     @AppStorage("lyricMode.autoShowOverlay") var autoShowOverlay: Bool = true
     
-    // Transcription engine type
-    @AppStorage("lyricMode.engineType") var engineTypeRaw: String = LyricModeEngineType.whisper.rawValue
+    // Transcription engine type (now only Apple Speech)
+    @AppStorage("lyricMode.engineType") var engineTypeRaw: String = LyricModeEngineType.appleSpeech.rawValue
     
     var engineType: LyricModeEngineType {
-        get { LyricModeEngineType(rawValue: engineTypeRaw) ?? .whisper }
+        get { .appleSpeech }
         set { 
             Task { @MainActor in
                 engineTypeRaw = newValue.rawValue 

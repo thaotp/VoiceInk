@@ -26,18 +26,12 @@ final class LyricModeWindowManager: ObservableObject {
     
     private var panel: LyricModeOverlayPanel?
     private var windowController: NSWindowController?
-    private var transcriptionEngine: RealtimeTranscriptionEngine?
     private var appleSpeechService: AppleSpeechRealtimeService?
-    private var teamsLiveCaptionsService: TeamsLiveCaptionsService?
-    private var whisperKitService: WhisperKitRealtimeService?
     private var diarizedOrchestrator: DiarizedTranscriberOrchestrator?
-    private var whisperContext: WhisperContext?
     private var cancellables = Set<AnyCancellable>()
     private var deviceChangeWorkItem: DispatchWorkItem?
     private var timer: Timer?
     
-    private let audioStreamService = RealtimeAudioStreamService()
-    private let vadService = FluidAudioVADService()
     let settings = LyricModeSettings.shared
     
     // MARK: - Initialization
@@ -53,38 +47,8 @@ final class LyricModeWindowManager: ObservableObject {
     // MARK: - Public Methods
     
     /// Show Lyric Mode with Whisper engine
-    func show(with whisperContext: WhisperContext) async throws {
-        guard !isVisible else { return }
-        
-        self.whisperContext = whisperContext
-        
-        // Configure audio device if specified
-        configureAudioDevice()
-        
-        // Configure VAD with settings
-        vadService.configuration.minSilenceDuration = settings.softTimeout
-        vadService.configuration.maxSilenceDuration = settings.hardTimeout
-        
-        // Create transcription engine with FluidAudio VAD
-        let engine = RealtimeTranscriptionEngine(
-            audioStream: audioStreamService,
-            fluidVadService: vadService
-        )
-        transcriptionEngine = engine
-        
-        // Initialize window
-        initializeWindow()
-        
-        // Start transcription
-        try await engine.start(with: whisperContext)
-        
-        // Show panel
-        panel?.show()
-        isVisible = true
-    }
-    
     /// Show Lyric Mode with Apple Speech engine
-    func showWithAppleSpeech() async throws {
+    func show() async throws {
         guard !isVisible else { return }
         
         // Configure audio device if specified
@@ -95,18 +59,10 @@ final class LyricModeWindowManager: ObservableObject {
         speechService.setLanguage(settings.selectedLanguage)
         appleSpeechService = speechService
         
-        // Create a simple transcription engine for display
-        // We'll use the speech service directly for transcription
-        let engine = RealtimeTranscriptionEngine(
-            audioStream: audioStreamService,
-            fluidVadService: vadService
-        )
-        transcriptionEngine = engine
-        
         // Initialize window
         initializeWindowForAppleSpeech()
         
-        // Start Apple Speech listening (requests authorization if needed)
+        // Start Apple Speech listening
         try await speechService.startListening()
         
         // Show panel
@@ -117,26 +73,26 @@ final class LyricModeWindowManager: ObservableObject {
     func hide() {
         guard isVisible else { return }
         
-        // Stop transcription engine
-        transcriptionEngine?.stop()
-        
-        // Stop Apple Speech if active
+        // Stop Apple Speech
         appleSpeechService?.stopListening()
         appleSpeechService = nil
+        
+        // Stop diarized orchestrator if active
+        diarizedOrchestrator?.stop()
+        diarizedOrchestrator = nil
         
         // Hide and cleanup window
         panel?.hide()
         deinitializeWindow()
         
-        transcriptionEngine = nil
         isVisible = false
     }
     
-    func toggle(with whisperContext: WhisperContext) async throws {
+    func toggle() async throws {
         if isVisible {
             hide()
         } else {
-            try await show(with: whisperContext)
+            try await show()
         }
     }
     
@@ -149,118 +105,27 @@ final class LyricModeWindowManager: ObservableObject {
         // Configure audio device if specified
         configureAudioDevice()
         
-        // Start based on engine type
-        switch settings.engineType {
-        case .whisper:
-            // Find the selected model
-            let modelName = settings.selectedModelName.isEmpty 
-                ? whisperState.availableModels.first?.name ?? ""
-                : settings.selectedModelName
+        // Start Apple Speech transcription
+        if settings.speakerDiarizationEnabled {
+            // Use diarized transcription with speaker labels
+            let orchestrator = DiarizedTranscriberOrchestrator.withEnergyBasedDiarization()
+            orchestrator.setLanguage(settings.selectedLanguage)
+            diarizedOrchestrator = orchestrator
             
-            guard let model = whisperState.availableModels.first(where: { $0.name == modelName }) else {
-                throw NSError(domain: "LyricMode", code: 1, userInfo: [NSLocalizedDescriptionKey: "No Whisper model available. Please download a model first."])
-            }
+            // Subscribe to diarization updates
+            subscribeToDiarizedTranscription(orchestrator: orchestrator)
             
-            // Load model if not already loaded
-            if whisperState.whisperContext == nil {
-                try await whisperState.loadModel(model)
-            }
+            try await orchestrator.start()
+        } else {
+            // Standard Apple Speech without diarization
+            let speechService = AppleSpeechRealtimeService()
+            speechService.setLanguage(settings.selectedLanguage)
+            appleSpeechService = speechService
             
-            guard let context = whisperState.whisperContext else {
-                throw NSError(domain: "LyricMode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to load Whisper model"])
-            }
+            // Subscribe to Apple Speech updates
+            subscribeToAppleSpeechTranscription(service: speechService)
             
-            // Set the language override for Lyrics mode
-            let language = settings.selectedLanguage == "auto" ? nil : settings.selectedLanguage
-            await context.setLanguageOverride(language)
-            
-            self.whisperContext = context
-            
-            // Configure VAD
-            vadService.configuration.minSilenceDuration = settings.softTimeout
-            vadService.configuration.maxSilenceDuration = settings.hardTimeout
-            
-            // Create engine
-            let engine = RealtimeTranscriptionEngine(
-                audioStream: audioStreamService,
-                fluidVadService: vadService
-            )
-            transcriptionEngine = engine
-            
-            // Subscribe to transcription updates
-            subscribeToWhisperTranscription(engine: engine)
-            
-            // Start transcription
-            try await engine.start(with: context)
-            
-        case .appleSpeech:
-            if settings.speakerDiarizationEnabled {
-                // Use diarized transcription with speaker labels
-                let orchestrator = DiarizedTranscriberOrchestrator.withEnergyBasedDiarization()
-                orchestrator.setLanguage(settings.selectedLanguage)
-                diarizedOrchestrator = orchestrator
-                
-                // Subscribe to diarization updates
-                subscribeToDiarizedTranscription(orchestrator: orchestrator)
-                
-                try await orchestrator.start()
-            } else {
-                // Standard Apple Speech without diarization
-                let speechService = AppleSpeechRealtimeService()
-                speechService.setLanguage(settings.selectedLanguage)
-                appleSpeechService = speechService
-                
-                // Subscribe to Apple Speech updates
-                subscribeToAppleSpeechTranscription(service: speechService)
-                
-                try await speechService.startListening()
-            }
-            
-        case .cloud:
-            // Cloud not implemented for real-time yet
-            throw NSError(domain: "LyricMode", code: 2, userInfo: [NSLocalizedDescriptionKey: "Cloud engine not supported for real-time"])
-            
-        case .whisperKit:
-            // Create WhisperKit service
-            let whisperKitSvc = WhisperKitRealtimeService()
-            whisperKitService = whisperKitSvc
-            
-            // Set language
-            whisperKitSvc.setLanguage(settings.selectedLanguage)
-            
-            // Load model if needed
-            if !whisperKitSvc.isModelLoaded {
-                let modelName = settings.selectedWhisperKitModel.isEmpty
-                    ? await whisperKitSvc.getRecommendedModel() ?? "tiny"
-                    : settings.selectedWhisperKitModel
-                
-                try await whisperKitSvc.loadModel(modelName, from: settings.whisperKitModelRepo)
-            }
-            
-            // Subscribe to WhisperKit updates
-            subscribeToWhisperKitTranscription(service: whisperKitSvc)
-            
-            // Start listening
-            try await whisperKitSvc.startListening()
-            
-        case .teamsLiveCaptions:
-            // Create Teams Live Captions service
-            let teamsService = TeamsLiveCaptionsService()
-            
-            // Set selected PID from settings if available
-            if settings.teamsSelectedPID > 0 {
-                teamsService.selectedProcessPID = pid_t(settings.teamsSelectedPID)
-                if !settings.teamsSelectedWindowTitle.isEmpty {
-                    teamsService.selectedWindowTitle = settings.teamsSelectedWindowTitle
-                }
-            }
-            
-            // Subscribe to Teams captions updates
-            subscribeToTeamsLiveCaptions(service: teamsService)
-            
-            // Start reading captions
-            teamsService.startReading()
-            teamsLiveCaptionsService = teamsService
+            try await speechService.startListening()
         }
         
         isRecording = true
@@ -275,15 +140,8 @@ final class LyricModeWindowManager: ObservableObject {
         
         print("[WindowManager] stopRecording - Full Cleanup Starting")
         
-        transcriptionEngine?.stop()
         appleSpeechService?.stopListening()
         appleSpeechService = nil
-        
-        teamsLiveCaptionsService?.stopReading()
-        teamsLiveCaptionsService = nil
-        
-        whisperKitService?.stopListening()
-        whisperKitService = nil
         
         // Stop diarized orchestrator
         diarizedOrchestrator?.stop()
@@ -306,19 +164,15 @@ final class LyricModeWindowManager: ObservableObject {
     
     /// Pause recording (keeps engine alive but stops processing)
     func pauseRecording() {
-        transcriptionEngine?.pause()
         appleSpeechService?.pause()
-        teamsLiveCaptionsService?.pauseReading() // Use pause instead of stop to preserve data
-        whisperKitService?.pause()
+        diarizedOrchestrator?.pause()
         stopTimer()
     }
     
     /// Resume recording after pause
     func resumeRecording() {
-        transcriptionEngine?.resume()
         appleSpeechService?.resume()
-        teamsLiveCaptionsService?.resumeReading() // Use resume to preserve data
-        whisperKitService?.resume()
+        diarizedOrchestrator?.resume()
         startTimer()
     }
     
@@ -334,11 +188,7 @@ final class LyricModeWindowManager: ObservableObject {
     /// Show overlay panel
     func showOverlay() {
         if panel == nil {
-            if appleSpeechService != nil {
-                initializeWindowForAppleSpeech()
-            } else if transcriptionEngine != nil {
-                initializeWindow()
-            }
+            initializeWindowForAppleSpeech()
         }
         panel?.show()
         isOverlayVisible = true
@@ -506,10 +356,7 @@ final class LyricModeWindowManager: ObservableObject {
     }
     
     func clear() {
-        transcriptionEngine?.clear()
         appleSpeechService?.clear()
-        teamsLiveCaptionsService?.clear()
-        whisperKitService?.clear()
         
         // Destroy old overlay so a fresh one is created on next show
         deinitializeWindow()
@@ -581,25 +428,7 @@ final class LyricModeWindowManager: ObservableObject {
         }
     }
     
-    private func initializeWindow() {
-        deinitializeWindow()
-        
-        let overlayPanel = LyricModeOverlayPanel()
-        overlayPanel.isClickThroughEnabled = settings.isClickThroughEnabled
-        
-        guard let engine = transcriptionEngine else { return }
-        
-        let overlayView = LyricModeOverlayView(
-            transcriptionEngine: engine,
-            settings: settings
-        )
-        
-        let hostingController = NSHostingController(rootView: overlayView)
-        overlayPanel.contentView = hostingController.view
-        
-        self.panel = overlayPanel
-        self.windowController = NSWindowController(window: overlayPanel)
-    }
+    // initializeWindow for Whisper removed - using initializeWindowForAppleSpeech only
     
     private func initializeWindowForAppleSpeech() {
         deinitializeWindow()

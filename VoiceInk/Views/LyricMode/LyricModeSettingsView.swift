@@ -145,7 +145,7 @@ struct LyricModeSettingsView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .tint(lyricModeManager.isVisible ? .red : .accentColor)
-            .disabled(isStarting || (settings.engineType == .whisper && selectedModel == nil))
+            .disabled(isStarting)
         }
         .padding(24)
         .background(.regularMaterial)
@@ -202,18 +202,8 @@ struct LyricModeSettingsView: View {
     
     @ViewBuilder
     private var engineSpecificSettings: some View {
-        switch settings.engineType {
-        case .whisper:
-            whisperSettings
-        case .cloud:
-            cloudSettings
-        case .appleSpeech:
-            appleSpeechSettings
-        case .whisperKit:
-            WhisperKitSettingsSection(settings: settings)
-        case .teamsLiveCaptions:
-            teamsLiveCaptionsSettings
-        }
+        // Only Apple Speech engine is supported
+        appleSpeechSettings
     }
     
     private var whisperSettings: some View {
@@ -491,29 +481,7 @@ struct LyricModeSettingsView: View {
                 if lyricModeManager.isVisible {
                     lyricModeManager.hide()
                 } else {
-                    switch settings.engineType {
-                    case .whisper:
-                        guard let model = selectedModel else { return }
-                        let context = try await WhisperContext.createContext(path: model.url.path)
-                        let language = settings.selectedLanguage == "auto" ? nil : settings.selectedLanguage
-                        await context.setLanguageOverride(language)
-                        await context.setTemperatureOverride(Float(settings.temperature))
-                        if settings.beamSize > 1 { await context.setBeamSizeOverride(Int32(settings.beamSize)) }
-                        if !settings.whisperPrompt.isEmpty { await context.setPrompt(settings.whisperPrompt) }
-                        try await lyricModeManager.show(with: context)
-                        
-                    case .appleSpeech:
-                        try await lyricModeManager.showWithAppleSpeech()
-                        
-                    case .whisperKit:
-                        print("Starting WhisperKit transcription...")
-                        
-                    case .cloud:
-                        print("Cloud transcription not yet implemented")
-                        
-                    case .teamsLiveCaptions:
-                        print("Starting Teams Live Captions...")
-                    }
+                    try await lyricModeManager.show()
                 }
             } catch {
                 print("Failed to toggle Lyric Mode: \(error.localizedDescription)")

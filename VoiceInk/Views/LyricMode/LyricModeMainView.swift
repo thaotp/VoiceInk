@@ -609,18 +609,7 @@ struct LyricModeMainView: View {
                 isPaused = true
                 lyricModeManager.pauseRecording()
             } else {
-                // Start new recording - check if Teams Live Captions needs window selection
-                if settings.engineType == .teamsLiveCaptions {
-                    // Clear previous session data before showing window selection
-                    transcriptSegments = []
-                    translatedSegments = []
-                    partialText = ""
-                    
-                    // Refresh windows and show selection sheet
-                    teamsService.refreshAvailableWindows()
-                    showingWindowSelection = true
-                    return
-                }
+                // Start new recording
                 
                 await startRecordingAfterWindowSelection()
             }
@@ -783,47 +772,21 @@ struct LyricModeMainView: View {
         lyricModeManager.transcriptionPublisher
             .receive(on: DispatchQueue.main)
             .sink { [self] text in
-                if settings.engineType == .teamsLiveCaptions {
-                    // For Teams: WindowManager publishes NEW caption text for translation
-                    // The segment is already added to transcriptSegments via $transcriptSegments sync
-                    // We just need to translate the new entry
-                    if settings.translationEnabled {
-                        // The new segment index is transcriptSegments.count - 1
-                        let newIndex = transcriptSegments.count - 1
-                        if newIndex >= 0 && newIndex < translatedSegments.count {
-                            // Only translate if not already translated
-                            if translatedSegments[newIndex].isEmpty {
-                                translateSegment(at: newIndex, text: text)
-                            }
-                        } else {
-                            // Sync translatedSegments and translate
-                            syncTranslatedSegmentsCount()
-                            let idx = transcriptSegments.count - 1
-                            if idx >= 0 {
-                                translateSegment(at: idx, text: text)
-                            }
-                        }
+                // Skip if this segment was already created by Live Translation mode
+                if settings.translateImmediately && liveTranslationCreatedSegments.contains(text) {
+                    // Already processed by live translation, just update if needed
+                    if let existingIndex = transcriptSegments.firstIndex(where: { 
+                        TranscriptTextProcessor.similarityRatio($0, text) > 0.7 
+                    }) {
+                        // Replace with the final version (more accurate)
+                        transcriptSegments[existingIndex] = text
+                        translateSegment(at: existingIndex, text: text)
                     }
-                } else {
-                    // For other engines: normal processing
-                    // Skip if this segment was already created by Live Translation mode
-                    if settings.translateImmediately && liveTranslationCreatedSegments.contains(text) {
-                        // Already processed by live translation, just update if needed
-                        if let existingIndex = transcriptSegments.firstIndex(where: { 
-                            TranscriptTextProcessor.similarityRatio($0, text) > 0.7 
-                        }) {
-                            // Replace with the final version (more accurate)
-                            transcriptSegments[existingIndex] = text
-                            translateSegment(at: existingIndex, text: text)
-                        }
-                        return
-                    }
-                    processNewTranscriptSegment(text)
+                    return
                 }
+                processNewTranscriptSegment(text)
             }
             .store(in: &cancellables)
-        
-
         
         lyricModeManager.partialTranscriptionPublisher
             .receive(on: DispatchQueue.main)
@@ -842,14 +805,11 @@ struct LyricModeMainView: View {
             }
             .store(in: &cancellables)
         
-        // Subscribe to transcript segments for Teams Live Captions display
+        // Subscribe to transcript segments for display
         lyricModeManager.$transcriptSegments
             .receive(on: DispatchQueue.main)
             .removeDuplicates() // Prevent cascade updates for same content
             .sink { [self] segments in
-                // Only process for Teams Live Captions
-                guard settings.engineType == .teamsLiveCaptions else { return }
-                
                 // Sync local transcriptSegments with manager
                 transcriptSegments = segments
                 syncTranslatedSegmentsCount()
@@ -1016,6 +976,7 @@ struct LyricModeMainView: View {
     /// Translate a segment at the given index
     private func translateSegment(at index: Int, text: String) {
         guard settings.translationEnabled else { return }
+        guard lyricModeManager.isRecording && !isPaused else { return }
         
         syncTranslatedSegmentsCount()
         
@@ -1036,6 +997,7 @@ struct LyricModeMainView: View {
     /// Retranslate a segment (forces re-translation by clearing first)
     private func retranslateSegment(at index: Int, text: String) {
         guard settings.translationEnabled else { return }
+        guard lyricModeManager.isRecording && !isPaused else { return }
         
         syncTranslatedSegmentsCount()
         
@@ -1139,7 +1101,7 @@ struct LyricModeSettingsPopup: View {
                     appearanceSection
                     
                     // Behavior section not needed for Teams mode
-                    if localEngineType != .teamsLiveCaptions {
+                    if true {  // Always show behavior section
                         Divider()
                         behaviorSection
                     }
@@ -1324,20 +1286,9 @@ struct LyricModeSettingsPopup: View {
                 }
             }
             
-            // Engine-specific configuration
+            // Engine-specific configuration (Apple Speech only)
             Group {
-                switch localEngineType {
-                case .whisper:
-                    whisperConfigSection
-                case .whisperKit:
-                    whisperKitConfigSection
-                case .appleSpeech:
-                    appleSpeechConfigSection
-                case .cloud:
-                    cloudConfigSection
-                case .teamsLiveCaptions:
-                    teamsLiveCaptionsConfigSection
-                }
+                appleSpeechConfigSection
             }
             .padding(.top, 8)
             
