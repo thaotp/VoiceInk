@@ -452,6 +452,19 @@ final class DiarizedTranscriberOrchestrator: ObservableObject {
 // MARK: - Convenience Extensions
 
 extension DiarizedTranscriberOrchestrator {
+    /// Create with the selected diarization backend from settings
+    static func withSelectedBackend() -> DiarizedTranscriberOrchestrator {
+        let settings = LyricModeSettings.shared
+        switch settings.diarizationBackend {
+        case .sherpaOnnx:
+            print("[DiarizedOrchestrator] Using Sherpa-Onnx diarization backend")
+            return DiarizedTranscriberOrchestrator(diarizationService: SherpaOnnxDiarizationService())
+        case .fluidAudio:
+            print("[DiarizedOrchestrator] Using energy-based diarization backend")
+            return DiarizedTranscriberOrchestrator(diarizationService: EnergyBasedDiarizationService())
+        }
+    }
+    
     /// Create with energy-based diarization (no ML model required)
     static func withEnergyBasedDiarization() -> DiarizedTranscriberOrchestrator {
         DiarizedTranscriberOrchestrator(diarizationService: EnergyBasedDiarizationService())

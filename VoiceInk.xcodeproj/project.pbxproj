@@ -62,9 +62,31 @@
 		E1CE28772E4336150082B758 /* whisper.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = whisper.xcframework; path = "../build-apple/whisper.xcframework"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		092C45492F1BBA1D008F240D /* Exceptions for "VoiceInk" folder in "Embed Frameworks" phase from "VoiceInk" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			attributesByRelativePath = {
+				"ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/lib/libonnxruntime.1.12.1.dylib" = (CodeSignOnCopy, );
+				"ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/lib/libonnxruntime.dylib" = (CodeSignOnCopy, );
+				"ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/lib/libsherpa-onnx-c-api.dylib" = (CodeSignOnCopy, );
+				"ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/lib/libsherpa-onnx-cxx-api.dylib" = (CodeSignOnCopy, );
+			};
+			buildPhase = E1A8C8CD2E1257B7003E58EC /* Embed Frameworks */;
+			membershipExceptions = (
+				"ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/lib/libonnxruntime.1.12.1.dylib",
+				"ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/lib/libonnxruntime.dylib",
+				"ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/lib/libsherpa-onnx-c-api.dylib",
+				"ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/lib/libsherpa-onnx-cxx-api.dylib",
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E11473B22CBE0F0A00318EE4 /* VoiceInk */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				092C45492F1BBA1D008F240D /* Exceptions for "VoiceInk" folder in "Embed Frameworks" phase from "VoiceInk" target */,
+			);
 			path = VoiceInk;
 			sourceTree = "<group>";
 		};
@@ -479,6 +501,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/VoiceInk/ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/include/**";
 				INFOPLIST_FILE = VoiceInk/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = VoiceInk;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -490,12 +513,18 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/VoiceInk/ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/lib",
+					"$(PROJECT_DIR)/VoiceInk/Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.64;
 				PRODUCT_BUNDLE_IDENTIFIER = com.thaotp.VoiceInk;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG ENABLE_NATIVE_SPEECH_ANALYZER $(inherited)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "VoiceInk/SherpaOnnx-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -516,6 +545,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/VoiceInk/ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/include/**";
 				INFOPLIST_FILE = VoiceInk/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = VoiceInk;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -527,12 +557,18 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/VoiceInk/ThirdParty/sherpa-onnx-v1.12.23-onnxruntime-1.12.1-osx-universal2-shared/lib",
+					"$(PROJECT_DIR)/VoiceInk/Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.64;
 				PRODUCT_BUNDLE_IDENTIFIER = com.thaotp.VoiceInk;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "ENABLE_NATIVE_SPEECH_ANALYZER $(inherited)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "VoiceInk/SherpaOnnx-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;

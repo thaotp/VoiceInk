@@ -108,7 +108,7 @@ final class LyricModeWindowManager: ObservableObject {
         // Start Apple Speech transcription
         if settings.speakerDiarizationEnabled {
             // Use diarized transcription with speaker labels
-            let orchestrator = DiarizedTranscriberOrchestrator.withEnergyBasedDiarization()
+            let orchestrator = DiarizedTranscriberOrchestrator.withSelectedBackend()
             orchestrator.setLanguage(settings.selectedLanguage)
             diarizedOrchestrator = orchestrator
             

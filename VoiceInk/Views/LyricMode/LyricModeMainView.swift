@@ -1069,6 +1069,7 @@ struct LyricModeSettingsPopup: View {
     @State private var localBackgroundOpacity: Double = 0.8
     @State private var localIsClickThroughEnabled: Bool = false
     @State private var localSpeakerDiarizationEnabled: Bool = false
+    @State private var localDiarizationBackend: DiarizationBackend = .fluidAudio
     
     // AI Provider state
     @State private var localAIProvider: String = "ollama"
@@ -1152,6 +1153,7 @@ struct LyricModeSettingsPopup: View {
             
             // Speaker diarization
             localSpeakerDiarizationEnabled = settings.speakerDiarizationEnabled
+            localDiarizationBackend = settings.diarizationBackend
         }
     }
     
@@ -1174,7 +1176,8 @@ struct LyricModeSettingsPopup: View {
         localTargetLanguage != settings.targetLanguage ||
         localTranslateImmediately != settings.translateImmediately ||
         localSentenceContinuityEnabled != settings.sentenceContinuityEnabled ||
-        localSpeakerDiarizationEnabled != settings.speakerDiarizationEnabled
+        localSpeakerDiarizationEnabled != settings.speakerDiarizationEnabled ||
+        localDiarizationBackend != settings.diarizationBackend
     }
     
     private func applySettingsAndDismiss() {
@@ -1211,6 +1214,7 @@ struct LyricModeSettingsPopup: View {
         
         // Speaker diarization setting
         settings.speakerDiarizationEnabled = localSpeakerDiarizationEnabled
+        settings.diarizationBackend = localDiarizationBackend
         
         // Notify about changes that need recording restart
         onSettingsApplied?(audioDeviceChanged, engineChanged)
@@ -1554,6 +1558,28 @@ extension LyricModeSettingsPopup {
                     }
                 }
                 .toggleStyle(.switch)
+                
+                // Diarization Backend Picker (shown when diarization is enabled)
+                if localSpeakerDiarizationEnabled {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Diarization Backend")
+                                .font(.subheadline)
+                            Text(localDiarizationBackend.description)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Picker("", selection: $localDiarizationBackend) {
+                            ForEach(DiarizationBackend.allCases) { backend in
+                                Label(backend.rawValue, systemImage: backend.icon)
+                                    .tag(backend)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 150)
+                    }
+                }
             } else {
                 Text("Using SFSpeechRecognizer")
                     .font(.caption)

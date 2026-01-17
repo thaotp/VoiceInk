@@ -15,6 +15,32 @@ enum LyricModeEngineType: String, CaseIterable, Identifiable {
     }
 }
 
+/// Diarization backend options for speaker identification
+enum DiarizationBackend: String, CaseIterable, Identifiable {
+    case fluidAudio = "FluidAudio"
+    case sherpaOnnx = "Sherpa-Onnx"
+    
+    var id: String { rawValue }
+    
+    var description: String {
+        switch self {
+        case .fluidAudio:
+            return "Audio energy-based speaker detection"
+        case .sherpaOnnx:
+            return "Neural network speaker diarization"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .fluidAudio:
+            return "waveform"
+        case .sherpaOnnx:
+            return "brain.head.profile"
+        }
+    }
+}
+
 /// Settings model for Lyric Mode appearance and behavior
 class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.maxVisibleLines") var maxVisibleLines: Int = 5
@@ -69,6 +95,12 @@ class LyricModeSettings: ObservableObject {
     // Apple Speech specific settings
     @AppStorage("lyricMode.appleSpeechMode") var appleSpeechModeRaw: String = AppleSpeechMode.standard.rawValue
     @AppStorage("lyricMode.speakerDiarizationEnabled") var speakerDiarizationEnabled: Bool = false
+    @AppStorage("lyricMode.diarizationBackend") var diarizationBackendRaw: String = DiarizationBackend.fluidAudio.rawValue
+    
+    var diarizationBackend: DiarizationBackend {
+        get { DiarizationBackend(rawValue: diarizationBackendRaw) ?? .fluidAudio }
+        set { diarizationBackendRaw = newValue.rawValue }
+    }
     
     var appleSpeechMode: AppleSpeechMode {
         get { AppleSpeechMode(rawValue: appleSpeechModeRaw) ?? .standard }

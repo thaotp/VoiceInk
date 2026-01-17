@@ -339,6 +339,31 @@ struct LyricModeSettingsView: View {
                     isOn: $settings.speakerDiarizationEnabled
                 )
                 
+                // Diarization Backend Picker (shown when diarization is enabled)
+                if settings.speakerDiarizationEnabled {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Diarization Backend")
+                                .font(.subheadline)
+                            Text(settings.diarizationBackend.description)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Picker("", selection: Binding(
+                            get: { settings.diarizationBackend },
+                            set: { settings.diarizationBackend = $0 }
+                        )) {
+                            ForEach(DiarizationBackend.allCases) { backend in
+                                Label(backend.rawValue, systemImage: backend.icon)
+                                    .tag(backend)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 160)
+                    }
+                }
+                
                 Divider()
                 
                 Text(settings.appleSpeechMode.description)
