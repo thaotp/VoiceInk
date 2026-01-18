@@ -3,6 +3,7 @@ import AVFoundation
 import Speech
 import Combine
 import os
+import NaturalLanguage
 
 /// Real-time speech recognition service using Apple's SpeechTranscriber (macOS 26+)
 /// Falls back to SFSpeechRecognizer on older macOS versions
@@ -255,22 +256,85 @@ final class AppleSpeechRealtimeService: ObservableObject {
             do {
                 try await analyzer.start(inputSequence: stream)
                 
+                // === Streaming NLP Semantics for Japanese ===
+                // Stabilization-based sentence splitting
+                let tokenizer = NLTokenizer(unit: .sentence)
+                var lastText: String = ""
+                var lastTextChangeTime: Date = Date()
+                var shippedPrefixLength: Int = 0
+                let sentenceEnders: Set<Character> = ["。", "？", "！", ".", "?", "!"]
+                let stabilityThreshold: TimeInterval = 1.5
+                
                 for try await result in transcriber.results {
-                    let text = String(result.text.characters)
+                    let text = String(result.text.characters).trimmingCharacters(in: .whitespaces)
+                    guard !text.isEmpty else { continue }
                     
-                    await MainActor.run {
-                        // ALWAYS update partial transcript immediately for live feel
-                        // This ensures we see text appearing as soon as recognizer has ANY hypothesis
-                        if !result.isFinal {
-                            self.partialTranscript = text
-                        } else {
-                            // Only finalize when truly final
-                            if !text.isEmpty {
-                                self.transcript += text
-                                self.partialTranscript = ""
-                                self.transcriptionPublisher.send(text)
+                    let now = Date()
+                    
+                    // Track text changes
+                    if text != lastText {
+                        lastTextChangeTime = now
+                        lastText = text
+                    }
+                    
+                    let timeSinceLastChange = now.timeIntervalSince(lastTextChangeTime)
+                    let isStable = timeSinceLastChange >= stabilityThreshold
+                    
+                    // Determine unshipped text
+                    let unshippedText = text.count > shippedPrefixLength
+                        ? String(text.dropFirst(shippedPrefixLength)).trimmingCharacters(in: .whitespaces)
+                        : ""
+                    
+                    // Decision logic (Conservative: Only split on EXPLICIT punctuation)
+                    var textToFinalize: String? = nil
+                    var remainderText: String = ""
+                    
+                    if result.isFinal {
+                        textToFinalize = unshippedText.isEmpty ? nil : unshippedText
+                        remainderText = ""
+                    } else if isStable && !unshippedText.isEmpty {
+                        // CONSERVATIVE: Only split if we find EXPLICIT punctuation
+                        if let lastPunctuationIndex = unshippedText.lastIndex(where: { sentenceEnders.contains($0) }) {
+                            let endIndex = unshippedText.index(after: lastPunctuationIndex)
+                            textToFinalize = String(unshippedText[..<endIndex]).trimmingCharacters(in: .whitespaces)
+                            
+                            if endIndex < unshippedText.endIndex {
+                                remainderText = String(unshippedText[endIndex...]).trimmingCharacters(in: .whitespaces)
+                            } else {
+                                remainderText = ""
                             }
                         }
+                        // If no punctuation found, do NOT split
+                    }
+                    
+                    // Emit finalized sentences
+                    if let finalText = textToFinalize, !finalText.isEmpty {
+                        await MainActor.run {
+                            self.transcript += finalText
+                            self.transcriptionPublisher.send(finalText)
+                        }
+                        shippedPrefixLength = text.count - remainderText.count
+                    }
+                    
+                    // Update partial transcript
+                    let currentUnshipped = text.count > shippedPrefixLength
+                        ? String(text.dropFirst(shippedPrefixLength)).trimmingCharacters(in: .whitespaces)
+                        : ""
+                    
+                    if !result.isFinal {
+                        await MainActor.run {
+                            self.partialTranscript = currentUnshipped
+                        }
+                    }
+                    
+                    // Reset on isFinal
+                    if result.isFinal {
+                        await MainActor.run {
+                            self.partialTranscript = ""
+                        }
+                        lastText = ""
+                        lastTextChangeTime = Date()
+                        shippedPrefixLength = 0
                     }
                 }
             } catch {

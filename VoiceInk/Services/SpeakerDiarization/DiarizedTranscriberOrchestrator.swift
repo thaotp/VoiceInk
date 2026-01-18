@@ -261,11 +261,24 @@ final class DiarizedTranscriberOrchestrator: ObservableObject {
                 
                 // Task 2: Process results as they arrive
                 group.addTask { [self] in
-                    // Helper for sentence detection
+                    // === Streaming NLP Semantics for Japanese ===
+                    // Strategy:
+                    // 1. Track text stability (how long since last change)
+                    // 2. Only split sentences when text is "stable" (unchanged for ~1.5s)
+                    // 3. Use Japanese punctuation patterns for sentence detection
+                    // 4. Apple's isFinal is the ultimate authority for finalization
+                    
                     let tokenizer = NLTokenizer(unit: .sentence)
-                    // Track sentences handled within the current utterance to avoid duplication
-                    var shippedUtteranceSentenceCount: Int = 0
                     var currentSegmentId: UUID? = nil
+                    
+                    // Stabilization tracking
+                    var lastText: String = ""
+                    var lastTextChangeTime: Date = Date()
+                    var shippedPrefixLength: Int = 0  // How much of the current utterance we've already finalized
+                    
+                    // Japanese sentence-ending patterns
+                    let sentenceEnders: Set<Character> = ["。", "？", "！", ".", "?", "!"]
+                    let stabilityThreshold: TimeInterval = 1.5  // Seconds of stability before soft-finalization
                     
                     for try await result in transcriber.results {
                         guard !Task.isCancelled else { break }
@@ -274,42 +287,136 @@ final class DiarizedTranscriberOrchestrator: ObservableObject {
                         guard !text.isEmpty else { continue }
                         
                         let timestamp = Date().timeIntervalSince(streamStartTime)
+                        let now = Date()
                         
                         // Lookup current speaker
                         let speakerResult = await diarizationMerger.lookupSpeaker(at: timestamp)
                         let speakerLabel = speakerResult.toLabel
                         
-                        // Simple Logic: One Segment per Utterance
-                        let segmentId = currentSegmentId ?? UUID()
-                        currentSegmentId = segmentId
+                        // Check if text changed
+                        if text != lastText {
+                            lastTextChangeTime = now
+                            lastText = text
+                        }
                         
-                        let segment = TranscriptSegment(
-                            id: segmentId,
-                            speaker: speakerLabel,
-                            words: [],
-                            text: text,
-                            startTime: timestamp,
-                            endTime: timestamp,
-                            isFinal: result.isFinal
-                        )
+                        let timeSinceLastChange = now.timeIntervalSince(lastTextChangeTime)
+                        let isStable = timeSinceLastChange >= stabilityThreshold
                         
-                        await MainActor.run {
-                            if let existingIndex = self.segments.firstIndex(where: { $0.id == segmentId }) {
-                                self.segments[existingIndex] = segment
-                                if result.isFinal {
-                                    print("[DiarizedOrchestrator] ✅ Finalized: '\(segment.text)'")
-                                    self.transcriptContinuation?.yield(.segmentFinalized(segment))
+                        // Determine what part of the text is "new" (not yet shipped)
+                        let unshippedText = text.count > shippedPrefixLength 
+                            ? String(text.dropFirst(shippedPrefixLength)).trimmingCharacters(in: .whitespaces)
+                            : ""
+                        
+                        // === DECISION LOGIC (Conservative: Only split on EXPLICIT punctuation) ===
+                        var textToFinalize: String? = nil
+                        var remainderText: String = ""
+                        
+                        if result.isFinal {
+                            // Apple says utterance is done - finalize everything unshipped
+                            textToFinalize = unshippedText.isEmpty ? nil : unshippedText
+                            remainderText = ""
+                        } else if isStable && !unshippedText.isEmpty {
+                            // CONSERVATIVE: Only split if we find EXPLICIT punctuation
+                            // Search for the LAST occurrence of a sentence-ending punctuation
+                            if let lastPunctuationIndex = unshippedText.lastIndex(where: { sentenceEnders.contains($0) }) {
+                                // Found punctuation - finalize everything up to and including it
+                                let endIndex = unshippedText.index(after: lastPunctuationIndex)
+                                textToFinalize = String(unshippedText[..<endIndex]).trimmingCharacters(in: .whitespaces)
+                                
+                                // Keep the rest as remainder
+                                if endIndex < unshippedText.endIndex {
+                                    remainderText = String(unshippedText[endIndex...]).trimmingCharacters(in: .whitespaces)
                                 } else {
-                                    self.transcriptContinuation?.yield(.segmentUpdated(segment))
+                                    remainderText = ""
                                 }
-                            } else {
-                                self.segments.append(segment)
-                                print("[DiarizedOrchestrator] 📝 New segment: '\(segment.text)'")
-                                self.transcriptContinuation?.yield(.newSegmentStarted(segment))
+                            }
+                            // If no punctuation found, do NOT split - keep accumulating
+                        }
+                        
+                        // === EMIT FINALIZED SENTENCES ===
+                        if let finalText = textToFinalize, !finalText.isEmpty {
+                            // Split into individual sentences for cleaner bubbles
+                            tokenizer.string = finalText
+                            var sentencesToEmit: [String] = []
+                            tokenizer.enumerateTokens(in: finalText.startIndex..<finalText.endIndex) { range, _ in
+                                let s = String(finalText[range]).trimmingCharacters(in: .whitespaces)
+                                if !s.isEmpty { sentencesToEmit.append(s) }
+                                return true
+                            }
+                            
+                            // If tokenizer didn't split, emit as single sentence
+                            if sentencesToEmit.isEmpty {
+                                sentencesToEmit = [finalText]
+                            }
+                            
+                            for sentenceText in sentencesToEmit {
+                                let segmentId = currentSegmentId ?? UUID()
+                                
+                                let segment = TranscriptSegment(
+                                    id: segmentId,
+                                    speaker: speakerLabel,
+                                    words: [],
+                                    text: sentenceText,
+                                    startTime: timestamp,
+                                    endTime: timestamp,
+                                    isFinal: true
+                                )
+                                
+                                await MainActor.run {
+                                    if let existingIndex = self.segments.firstIndex(where: { $0.id == segmentId }) {
+                                        self.segments[existingIndex] = segment
+                                        print("[DiarizedOrchestrator] ✅ Soft-Finalized: '\(segment.text)'")
+                                        self.transcriptContinuation?.yield(.segmentFinalized(segment))
+                                    } else {
+                                        self.segments.append(segment)
+                                        print("[DiarizedOrchestrator] ✅ Finalized: '\(segment.text)'")
+                                        self.transcriptContinuation?.yield(.segmentFinalized(segment))
+                                    }
+                                }
+                                
+                                currentSegmentId = nil  // Next sentence gets new ID
+                            }
+                            
+                            // Update shipped prefix
+                            shippedPrefixLength = text.count - remainderText.count
+                        }
+                        
+                        // === UPDATE PARTIAL SEGMENT (Remainder) ===
+                        let currentUnshipped = text.count > shippedPrefixLength 
+                            ? String(text.dropFirst(shippedPrefixLength)).trimmingCharacters(in: .whitespaces)
+                            : ""
+                        
+                        if !currentUnshipped.isEmpty && !result.isFinal {
+                            let segmentId = currentSegmentId ?? UUID()
+                            currentSegmentId = segmentId
+                            
+                            let segment = TranscriptSegment(
+                                id: segmentId,
+                                speaker: speakerLabel,
+                                words: [],
+                                text: currentUnshipped,
+                                startTime: timestamp,
+                                endTime: timestamp,
+                                isFinal: false
+                            )
+                            
+                            await MainActor.run {
+                                if let existingIndex = self.segments.firstIndex(where: { $0.id == segmentId }) {
+                                    self.segments[existingIndex] = segment
+                                    self.transcriptContinuation?.yield(.segmentUpdated(segment))
+                                } else {
+                                    self.segments.append(segment)
+                                    print("[DiarizedOrchestrator] 📝 New partial: '\(segment.text)'")
+                                    self.transcriptContinuation?.yield(.newSegmentStarted(segment))
+                                }
                             }
                         }
                         
+                        // === RESET STATE on isFinal ===
                         if result.isFinal {
+                            lastText = ""
+                            lastTextChangeTime = Date()
+                            shippedPrefixLength = 0
                             currentSegmentId = nil
                         }
                     }
