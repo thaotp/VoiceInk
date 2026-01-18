@@ -50,7 +50,7 @@ actor DiarizationBufferActor {
             buffer.removeFirst(min(hopSize, buffer.count))
             bufferStartTimestamp = startTimestamp.advanced(bySamples: hopSize)
             
-            logger.debug("Emitted window: \(self.windowDuration)s at sample \(startTimestamp.sampleTime)")
+            // logger.debug("Emitted window: \(self.windowDuration)s at sample \(startTimestamp.sampleTime)")
             
             return window
         }

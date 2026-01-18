@@ -28,11 +28,21 @@ class SherpaOnnxSpeakerDiarizationWrapper {
     ///   - embeddingModelPath: Path to the speaker embedding ONNX model
     ///   - numClusters: Number of speakers (0 = auto-detect)
     ///   - threshold: Clustering threshold (default 0.5)
+    /// Initialize the speaker diarization with model paths
+    /// - Parameters:
+    ///   - segmentationModelPath: Path to the Pyannote segmentation ONNX model
+    ///   - embeddingModelPath: Path to the speaker embedding ONNX model
+    ///   - numClusters: Number of speakers (0 = auto-detect)
+    ///   - threshold: Clustering threshold (default 0.5)
+    ///   - minDurationOn: Minimum duration of a segment in seconds (default 0.2)
+    ///   - minDurationOff: Minimum gap between segments in seconds (default 0.2)
     func initialize(
         segmentationModelPath: String,
         embeddingModelPath: String,
         numClusters: Int32 = 0,
-        threshold: Float = 0.5
+        threshold: Float = 0.5,
+        minDurationOn: Float = 0.2,
+        minDurationOff: Float = 0.2
     ) -> Bool {
         guard diarizationPtr == nil else {
             logger.warning("Already initialized")
@@ -56,14 +66,22 @@ class SherpaOnnxSpeakerDiarizationWrapper {
         }
         
         // Configure segmentation model (Pyannote)
-        config.segmentation.pyannote.model = segPathCString
+        if let segPath = segPathCString {
+            config.segmentation.pyannote.model = UnsafePointer(segPath)
+        }
         
         // Configure embedding extractor
-        config.embedding.model = embPathCString
+        if let embPath = embPathCString {
+            config.embedding.model = UnsafePointer(embPath)
+        }
         
         // Configure clustering
         config.clustering.num_clusters = numClusters
         config.clustering.threshold = threshold
+        
+        // Configure VAD (Voice Activity Detection) parameters
+        config.min_duration_on = minDurationOn
+        config.min_duration_off = minDurationOff
         
         // Create the diarization object
         let ptr = SherpaOnnxCreateOfflineSpeakerDiarization(&config)
@@ -114,7 +132,7 @@ class SherpaOnnxSpeakerDiarizationWrapper {
         let numSegments = SherpaOnnxOfflineSpeakerDiarizationResultGetNumSegments(result)
         
         // Get the pointer to sorted segments once, then index into it safely
-        if let segPtr = SherpaOnnxOfflineSpeakerDiarizationResultGetSortedSegments(result) {
+        if let segPtr = SherpaOnnxOfflineSpeakerDiarizationResultSortByStartTime(result) {
             for i in 0..<numSegments {
                 let segmentData = segPtr[Int(i)]
                 segments.append(SpeakerDiarizationSegment(

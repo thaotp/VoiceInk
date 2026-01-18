@@ -62,6 +62,16 @@
 		E1CE28772E4336150082B758 /* whisper.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = whisper.xcframework; path = "../build-apple/whisper.xcframework"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		092C454F2F1BD41A008F240D /* Exceptions for "VoiceInk" folder in "VoiceInk" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Resources/SherpaOnnxModels/3dspeaker-embedding.onnx",
+			);
+			target = E11473AF2CBE0F0A00318EE4 /* VoiceInk */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
 		092C45492F1BBA1D008F240D /* Exceptions for "VoiceInk" folder in "Embed Frameworks" phase from "VoiceInk" target */ = {
 			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
@@ -85,6 +95,7 @@
 		E11473B22CBE0F0A00318EE4 /* VoiceInk */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
+				092C454F2F1BD41A008F240D /* Exceptions for "VoiceInk" folder in "VoiceInk" target */,
 				092C45492F1BBA1D008F240D /* Exceptions for "VoiceInk" folder in "Embed Frameworks" phase from "VoiceInk" target */,
 			);
 			path = VoiceInk;

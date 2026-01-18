@@ -52,10 +52,10 @@ final class DiarizedTranscriberOrchestrator: ObservableObject {
     
     // MARK: - Initialization
     
-    init(diarizationService: (any DiarizationServiceProtocol)? = nil) {
+    init(diarizationService: (any DiarizationServiceProtocol)? = nil, windowDuration: TimeInterval = 0.5, hopDuration: TimeInterval = 0.25) {
         // Use provided service or default to mock for development
         self.diarizationService = diarizationService ?? MockDiarizationService()
-        self.diarizationBuffer = DiarizationBufferActor()
+        self.diarizationBuffer = DiarizationBufferActor(windowDuration: windowDuration, hopDuration: hopDuration)
         self.transcriptionMerger = TranscriptionMergerActor(diarizationActor: diarizationMerger)
         
         // Create output stream
@@ -457,10 +457,17 @@ extension DiarizedTranscriberOrchestrator {
         let settings = LyricModeSettings.shared
         switch settings.diarizationBackend {
         case .sherpaOnnx:
-            print("[DiarizedOrchestrator] Using Sherpa-Onnx diarization backend")
-            return DiarizedTranscriberOrchestrator(diarizationService: SherpaOnnxDiarizationService())
+            print("[DiarizedOrchestrator] Using Sherpa-Onnx diarization backend (10s windows)")
+            // Sherpa-Onnx offline diarization needs longer audio windows (10s minimum)
+            // for accurate speaker clustering. Use 5s hop for 50% overlap.
+            return DiarizedTranscriberOrchestrator(
+                diarizationService: SherpaOnnxDiarizationService(),
+                windowDuration: 10.0,
+                hopDuration: 5.0
+            )
         case .fluidAudio:
             print("[DiarizedOrchestrator] Using energy-based diarization backend")
+            // Energy-based works with short windows (0.5s)
             return DiarizedTranscriberOrchestrator(diarizationService: EnergyBasedDiarizationService())
         }
     }

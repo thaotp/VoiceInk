@@ -308,7 +308,9 @@ struct LyricModeMainView: View {
                             emptyState
                         } else {
                             // Display each transcript segment as a paragraph
-                            ForEach(Array(transcriptSegments.enumerated()), id: \.offset) { index, segment in
+                            // Display each transcript segment as a paragraph
+                            ForEach(0..<transcriptSegments.count, id: \.self) { index in
+                                let segment = transcriptSegments[index]
                                 SegmentRowView(
                                     index: index,
                                     segment: segment,
@@ -335,6 +337,7 @@ struct LyricModeMainView: View {
                                         }
                                     }
                                 )
+                                .equatable() // Explicitly enable Equatable check
                             }
                             
                             // Partial (in-progress) text
@@ -1853,7 +1856,7 @@ extension LyricModeSettingsPopup {
 // MARK: - Segment Row View (with hover actions)
 
 /// A view that displays a segment with hover-revealed action buttons
-struct SegmentRowView: View {
+struct SegmentRowView: View, Equatable {
     let index: Int
     let segment: String
     let translation: String
@@ -1862,11 +1865,22 @@ struct SegmentRowView: View {
     let isIgnored: Bool
     let translationEnabled: Bool
     
+    // Use stored closures that don't capture View state to allow equality checks
     let onCopy: () -> Void
     let onRetranslate: () -> Void
     let onToggleIgnore: () -> Void
     
     @State private var isHovering = false
+    
+    static func == (lhs: SegmentRowView, rhs: SegmentRowView) -> Bool {
+        return lhs.index == rhs.index &&
+               lhs.segment == rhs.segment &&
+               lhs.translation == rhs.translation &&
+               lhs.fontSize == rhs.fontSize &&
+               lhs.isLatest == rhs.isLatest &&
+               lhs.isIgnored == rhs.isIgnored &&
+               lhs.translationEnabled == rhs.translationEnabled
+    }
     
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
