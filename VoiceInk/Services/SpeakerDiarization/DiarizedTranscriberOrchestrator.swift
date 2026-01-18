@@ -3,6 +3,7 @@ import AVFoundation
 import Speech
 import Combine
 import os
+import NaturalLanguage
 
 /// Orchestrates real-time transcription with speaker diarization
 /// Merges Apple Speech transcription with FluidAudio diarization into chat-like segments
@@ -260,8 +261,11 @@ final class DiarizedTranscriberOrchestrator: ObservableObject {
                 
                 // Task 2: Process results as they arrive
                 group.addTask { [self] in
+                    // Helper for sentence detection
+                    let tokenizer = NLTokenizer(unit: .sentence)
+                    // Track sentences handled within the current utterance to avoid duplication
+                    var shippedUtteranceSentenceCount: Int = 0
                     var currentSegmentId: UUID? = nil
-                    var lastFinalizedText: String = ""
                     
                     for try await result in transcriber.results {
                         guard !Task.isCancelled else { break }
@@ -271,74 +275,42 @@ final class DiarizedTranscriberOrchestrator: ObservableObject {
                         
                         let timestamp = Date().timeIntervalSince(streamStartTime)
                         
-                        // Lookup current speaker from diarization
+                        // Lookup current speaker
                         let speakerResult = await diarizationMerger.lookupSpeaker(at: timestamp)
                         let speakerLabel = speakerResult.toLabel
                         
-                        // DEBUG: Print transcription result
-                        print("[DiarizedOrchestrator] Received: '\(text)' isFinal=\(result.isFinal) speaker=\(speakerLabel.displayName)")
+                        // Simple Logic: One Segment per Utterance
+                        let segmentId = currentSegmentId ?? UUID()
+                        currentSegmentId = segmentId
+                        
+                        let segment = TranscriptSegment(
+                            id: segmentId,
+                            speaker: speakerLabel,
+                            words: [],
+                            text: text,
+                            startTime: timestamp,
+                            endTime: timestamp,
+                            isFinal: result.isFinal
+                        )
+                        
+                        await MainActor.run {
+                            if let existingIndex = self.segments.firstIndex(where: { $0.id == segmentId }) {
+                                self.segments[existingIndex] = segment
+                                if result.isFinal {
+                                    print("[DiarizedOrchestrator] ✅ Finalized: '\(segment.text)'")
+                                    self.transcriptContinuation?.yield(.segmentFinalized(segment))
+                                } else {
+                                    self.transcriptContinuation?.yield(.segmentUpdated(segment))
+                                }
+                            } else {
+                                self.segments.append(segment)
+                                print("[DiarizedOrchestrator] 📝 New segment: '\(segment.text)'")
+                                self.transcriptContinuation?.yield(.newSegmentStarted(segment))
+                            }
+                        }
                         
                         if result.isFinal {
-                            // Finalize current segment with final text
-                            let newText = text.hasPrefix(lastFinalizedText) 
-                                ? String(text.dropFirst(lastFinalizedText.count)).trimmingCharacters(in: .whitespaces)
-                                : text
-                            
-                            if !newText.isEmpty {
-                                let segment = TranscriptSegment(
-                                    id: currentSegmentId ?? UUID(),
-                                    speaker: speakerLabel,
-                                    words: [],
-                                    text: newText,
-                                    startTime: timestamp,
-                                    endTime: timestamp,
-                                    isFinal: true
-                                )
-                                
-                                await MainActor.run {
-                                    if let existingIndex = self.segments.firstIndex(where: { $0.id == segment.id }) {
-                                        self.segments[existingIndex] = segment
-                                    } else {
-                                        self.segments.append(segment)
-                                    }
-                                    print("[DiarizedOrchestrator] Finalized segment: '\(segment.text)' total=\(self.segments.count)")
-                                    self.transcriptContinuation?.yield(.segmentFinalized(segment))
-                                }
-                                
-                                lastFinalizedText = text
-                            }
                             currentSegmentId = nil
-                        } else {
-                            // Update or create partial segment
-                            let partialText = text.hasPrefix(lastFinalizedText)
-                                ? String(text.dropFirst(lastFinalizedText.count)).trimmingCharacters(in: .whitespaces)
-                                : text
-                            
-                            if !partialText.isEmpty {
-                                let segmentId = currentSegmentId ?? UUID()
-                                currentSegmentId = segmentId
-                                
-                                let segment = TranscriptSegment(
-                                    id: segmentId,
-                                    speaker: speakerLabel,
-                                    words: [],
-                                    text: partialText,
-                                    startTime: timestamp,
-                                    endTime: timestamp,
-                                    isFinal: false
-                                )
-                                
-                                await MainActor.run {
-                                    if let existingIndex = self.segments.firstIndex(where: { $0.id == segmentId }) {
-                                        self.segments[existingIndex] = segment
-                                        self.transcriptContinuation?.yield(.segmentUpdated(segment))
-                                    } else {
-                                        self.segments.append(segment)
-                                        self.transcriptContinuation?.yield(.newSegmentStarted(segment))
-                                    }
-                                    print("[DiarizedOrchestrator] Partial segment: '\(segment.text)' total=\(self.segments.count)")
-                                }
-                            }
                         }
                     }
                     print("[DiarizedOrchestrator] Result processing finished")

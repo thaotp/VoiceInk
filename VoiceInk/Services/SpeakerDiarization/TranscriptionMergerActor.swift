@@ -225,12 +225,15 @@ actor TranscriptionMergerActor {
         guard let current = currentSegment else { return true }
         
         // Check for speaker change (comparing speaker IDs)
+        // COMMENTED OUT FOR TESTING: Disable forced split on speaker change
+        /*
         if let currentID = current.speaker.speakerID,
            let newID = newSpeaker.speakerID,
            currentID != newID {
             logger.debug("Speaker change detected: \(currentID.description) -> \(newID.description)")
             return true
         }
+        */
         
         // Unknown -> Identified (don't split)
         // Identified -> Unknown (don't split for short gaps)
