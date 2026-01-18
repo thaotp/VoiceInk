@@ -103,7 +103,7 @@ class OllamaService: ObservableObject {
         return response.models
     }
     
-    func enhance(_ text: String, withSystemPrompt systemPrompt: String? = nil) async throws -> String {
+    func enhance(_ text: String, withSystemPrompt systemPrompt: String? = nil, model: String? = nil) async throws -> String {
         guard let url = URL(string: "\(baseURL)/api/generate") else {
             throw LocalAIError.invalidURL
         }
@@ -116,12 +116,16 @@ class OllamaService: ObservableObject {
             throw LocalAIError.invalidRequest
         }
         
+        // Use provided model or fall back to selectedModel
+        let modelToUse = model ?? selectedModel
+        
         print("\nOllama Enhancement Debug:")
+        print("Model: \(modelToUse)")
         print("Original Text: \(text)")
         print("System Prompt: \(systemPrompt)")
         
         let body: [String: Any] = [
-            "model": selectedModel,
+            "model": modelToUse,
             "prompt": text,
             "system": systemPrompt,
             "temperature": defaultTemperature,

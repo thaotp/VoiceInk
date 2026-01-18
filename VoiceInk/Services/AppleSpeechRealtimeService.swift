@@ -309,9 +309,27 @@ final class AppleSpeechRealtimeService: ObservableObject {
                     
                     // Emit finalized sentences
                     if let finalText = textToFinalize, !finalText.isEmpty {
+                        // Correct text using LLM if enabled in settings
+                        var textToEmit = finalText
+                        let lyricSettings = LyricModeSettings.shared
+                        
+                        if #available(macOS 14.0, *), lyricSettings.postProcessingEnabled {
+                             // Run correction asynchronously but wait for it to maintain order
+                             do {
+                                 textToEmit = try await LLMTextCorrector.shared.correctText(
+                                     finalText,
+                                     model: lyricSettings.postProcessingModel,
+                                     timeout: lyricSettings.postProcessingTimeout
+                                 )
+                             } catch {
+                                 // Fallback to original text on error or timeout
+                                 print("⚠️ [LLM Correction Failed]: \(error)")
+                             }
+                        }
+
                         await MainActor.run {
-                            self.transcript += finalText
-                            self.transcriptionPublisher.send(finalText)
+                            self.transcript += textToEmit
+                            self.transcriptionPublisher.send(textToEmit)
                         }
                         shippedPrefixLength = text.count - remainderText.count
                     }

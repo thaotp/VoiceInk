@@ -1087,6 +1087,11 @@ struct LyricModeSettingsPopup: View {
     @State private var localTargetLanguage: String = "Vietnamese"
     @State private var localTranslateImmediately: Bool = false
     
+    // Post-Processing state
+    @State private var localPostProcessingEnabled: Bool = false
+    @State private var localPostProcessingModel: String = "qwen2.5:3b"
+    @State private var localPostProcessingTimeout: Double = 2.0
+    
     // Sentence continuity state
     @State private var localSentenceContinuityEnabled: Bool = true
     
@@ -1151,6 +1156,11 @@ struct LyricModeSettingsPopup: View {
             localTargetLanguage = settings.targetLanguage
             localTranslateImmediately = settings.translateImmediately
             
+            // Post-Processing
+            localPostProcessingEnabled = settings.postProcessingEnabled
+            localPostProcessingModel = settings.postProcessingModel
+            localPostProcessingTimeout = settings.postProcessingTimeout
+            
             // Sentence continuity
             localSentenceContinuityEnabled = settings.sentenceContinuityEnabled
             
@@ -1178,6 +1188,9 @@ struct LyricModeSettingsPopup: View {
         localTranslationEnabled != settings.translationEnabled ||
         localTargetLanguage != settings.targetLanguage ||
         localTranslateImmediately != settings.translateImmediately ||
+        localPostProcessingEnabled != settings.postProcessingEnabled ||
+        localPostProcessingModel != settings.postProcessingModel ||
+        localPostProcessingTimeout != settings.postProcessingTimeout ||
         localSentenceContinuityEnabled != settings.sentenceContinuityEnabled ||
         localSpeakerDiarizationEnabled != settings.speakerDiarizationEnabled ||
         localDiarizationBackend != settings.diarizationBackend
@@ -1211,6 +1224,11 @@ struct LyricModeSettingsPopup: View {
         settings.translationEnabled = localTranslationEnabled
         settings.targetLanguage = localTargetLanguage
         settings.translateImmediately = localTranslateImmediately
+        
+        // Post-Processing settings
+        settings.postProcessingEnabled = localPostProcessingEnabled
+        settings.postProcessingModel = localPostProcessingModel
+        settings.postProcessingTimeout = localPostProcessingTimeout
         
         // Sentence continuity setting
         settings.sentenceContinuityEnabled = localSentenceContinuityEnabled
@@ -1689,7 +1707,10 @@ extension LyricModeSettingsPopup {
             
             Toggle("Show partial results highlight", isOn: $localShowPartialHighlight)
             
-            Toggle("Translate Immediately (Live Feel)", isOn: $localTranslateImmediately)
+            Toggle("Translate Partial Results", isOn: $localTranslateImmediately)
+            Text("Enable to translate incomplete sentences as you speak. Disable to translate only confirmed text.")
+                .font(.caption)
+                .foregroundColor(.secondary)
             
             Toggle("Click-through overlay", isOn: $localIsClickThroughEnabled)
             
@@ -1807,6 +1828,48 @@ extension LyricModeSettingsPopup {
                     }
                     
                     Text("Each paragraph will be translated using the selected AI model")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Divider()
+            
+            // Post-Processing Settings
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("LLM Post-Processing", isOn: $localPostProcessingEnabled)
+                
+                if localPostProcessingEnabled {
+                    // Model Selection
+                    HStack {
+                         Text("Model")
+                             .font(.subheadline)
+                             .foregroundColor(.secondary)
+                         Spacer()
+                         
+                         if !ollamaModels.isEmpty {
+                             Picker("Model", selection: $localPostProcessingModel) {
+                                 ForEach(ollamaModels) { model in
+                                     Text(model.name).tag(model.name)
+                                 }
+                             }
+                             .labelsHidden()
+                         } else {
+                             TextField("Model", text: $localPostProcessingModel)
+                                 .frame(width: 150)
+                         }
+                    }
+                    
+                    // Timeout
+                    HStack {
+                        Text("Timeout: \(String(format: "%.1fs", localPostProcessingTimeout))")
+                             .font(.subheadline)
+                             .foregroundColor(.secondary)
+                        Slider(value: $localPostProcessingTimeout, in: 0.5...5.0, step: 0.5)
+                            .frame(width: 120)
+                    }
+                    
+                    Text("Corrects punctuation and typos in processed text")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

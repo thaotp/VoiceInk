@@ -13,6 +13,7 @@ struct LyricModeSettingsView: View {
     
     // Teams Live Captions state
     @StateObject private var teamsService = TeamsLiveCaptionsService()
+    @StateObject private var ollamaService = OllamaService()
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -84,6 +85,19 @@ struct LyricModeSettingsView: View {
                             SettingsCard(title: "Behavior", icon: "gearshape.2") {
                                 behaviorSettingsContent
                             }
+                        }
+                        .padding(.horizontal, 24)
+                    }
+                    
+                    // 5. Post-Processing Section (Standalone)
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Post-Processing & LLM Correction")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 24)
+                        
+                        SettingsCard(title: "LLM Correction", icon: "sparkles") {
+                            postProcessingSettingsContent
                         }
                         .padding(.horizontal, 24)
                     }
@@ -488,10 +502,73 @@ struct LyricModeSettingsView: View {
             Divider()
             
             CustomToggle(
-                title: "Live Translation",
-                subtitle: "Translate sentences instantly",
+                title: "Translate Partial Results",
+                subtitle: "Enable for live updates, disable for stable text",
                 isOn: $settings.translateImmediately
             )
+        }
+    }
+    
+    // MARK: - Post-Processing Settings
+    
+    private var postProcessingSettingsContent: some View {
+        VStack(spacing: 16) {
+            CustomToggle(
+                title: "Enable LLM Correction",
+                subtitle: "Fix punctuation & typos via Ollama",
+                isOn: $settings.postProcessingEnabled
+            )
+            
+            if settings.postProcessingEnabled {
+                Divider()
+                
+                // Model Picker
+                HStack {
+                    Text("Model")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    
+                    if ollamaService.availableModels.isEmpty {
+                        TextField("Model name", text: $settings.postProcessingModel)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 150)
+                    } else {
+                        Picker("", selection: $settings.postProcessingModel) {
+                            ForEach(ollamaService.availableModels) { model in
+                                Text(model.name).tag(model.name)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 180)
+                    }
+                    
+                    Button(action: {
+                        Task { await ollamaService.refreshModels() }
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.accentColor)
+                }
+                
+                // Timeout Slider
+                HStack {
+                    Text("Timeout")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(String(format: "%.1fs", settings.postProcessingTimeout))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(width: 40)
+                    Slider(value: $settings.postProcessingTimeout, in: 0.5...5.0, step: 0.5)
+                        .frame(width: 100)
+                }
+            }
+        }
+        .onAppear {
+            Task { await ollamaService.refreshModels() }
         }
     }
     

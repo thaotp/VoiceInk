@@ -92,6 +92,11 @@ class LyricModeSettings: ObservableObject {
     // Sentence continuity setting
     @AppStorage("lyricMode.sentenceContinuityEnabled") var sentenceContinuityEnabled: Bool = true
     
+    // Post-Processing (LLM Correction) settings
+    @AppStorage("lyricMode.postProcessingEnabled") var postProcessingEnabled: Bool = false
+    @AppStorage("lyricMode.postProcessingModel") var postProcessingModel: String = "qwen2.5:3b"
+    @AppStorage("lyricMode.postProcessingTimeout") var postProcessingTimeout: Double = 2.0
+    
     // Apple Speech specific settings
     @AppStorage("lyricMode.appleSpeechMode") var appleSpeechModeRaw: String = AppleSpeechMode.standard.rawValue
     @AppStorage("lyricMode.speakerDiarizationEnabled") var speakerDiarizationEnabled: Bool = false
