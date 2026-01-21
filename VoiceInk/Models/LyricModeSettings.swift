@@ -97,6 +97,10 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.postProcessingModel") var postProcessingModel: String = "qwen2.5:3b"
     @AppStorage("lyricMode.postProcessingTimeout") var postProcessingTimeout: Double = 2.0
     
+    // Segment Processing settings
+    @AppStorage("lyricMode.deduplicationEnabled") var deduplicationEnabled: Bool = true
+    @AppStorage("lyricMode.similarityReplacementEnabled") var similarityReplacementEnabled: Bool = true
+    
     // Apple Speech specific settings
     @AppStorage("lyricMode.appleSpeechMode") var appleSpeechModeRaw: String = AppleSpeechMode.standard.rawValue
     @AppStorage("lyricMode.speakerDiarizationEnabled") var speakerDiarizationEnabled: Bool = false

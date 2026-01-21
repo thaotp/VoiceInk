@@ -312,15 +312,45 @@ struct LyricModeMainView: View {
     
     private var speechContentView: some View {
         ScrollViewReader { proxy in
-            ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .topTrailing) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
                         if transcriptSegments.isEmpty && partialText.isEmpty && !lyricModeManager.isRecording {
                             emptyState
                         } else {
-                            // Display each transcript segment as a paragraph
-                            // Display each transcript segment as a paragraph
-                            ForEach(Array(transcriptSegments.enumerated()), id: \.offset) { index, segment in
+                            // Scroll anchor at top (for reversed order)
+                            Color.clear
+                                .frame(height: 1)
+                                .id("top")
+                                .onAppear {
+                                    // If top appears, user is at top -> enable auto-scroll
+                                    shouldAutoScroll = true
+                                }
+                                .onDisappear {
+                                    // Robust check: Only disable if it wasn't our own auto-scroll (within last 0.5s)
+                                    // AND not caused by a data update pushing content (within last 0.5s)
+                                    let now = Date()
+                                    let timeSinceScroll = now.timeIntervalSince(lastAutoScrollTime)
+                                    let timeSinceData = now.timeIntervalSince(lastDataUpdateTime)
+                                    
+                                    if timeSinceScroll > 0.5 && timeSinceData > 0.5 {
+                                        shouldAutoScroll = false
+                                    }
+                                }
+                            
+                            // Partial (in-progress) text at top
+                            if !partialText.isEmpty {
+                                Text(partialText)
+                                    .font(.system(size: settings.fontSize))
+                                    .foregroundColor(.cyan)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .id("partial")
+                            }
+                            
+                            // Display each transcript segment in REVERSED order (newest first)
+                            ForEach(Array(transcriptSegments.enumerated().reversed()), id: \.offset) { index, segment in
                                 SegmentRowView(
                                     index: index,
                                     segment: segment,
@@ -359,37 +389,6 @@ struct LyricModeMainView: View {
                                 )
                                 .equatable() // Explicitly enable Equatable check
                             }
-                            
-                            // Partial (in-progress) text
-                            if !partialText.isEmpty {
-                                Text(partialText)
-                                    .font(.system(size: settings.fontSize))
-                                    .foregroundColor(.cyan)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .id("partial")
-                            }
-                            
-                            // Scroll anchor
-                            Color.clear
-                                .frame(height: 1)
-                                .id("bottom")
-                                .onAppear {
-                                    // If bottom appears, user is at bottom -> enable auto-scroll
-                                    shouldAutoScroll = true
-                                }
-                                .onDisappear {
-                                    // Robust check: Only disable if it wasn't our own auto-scroll (within last 0.5s)
-                                    // AND not caused by a data update pushing content (within last 0.5s)
-                                    let now = Date()
-                                    let timeSinceScroll = now.timeIntervalSince(lastAutoScrollTime)
-                                    let timeSinceData = now.timeIntervalSince(lastDataUpdateTime)
-                                    
-                                    if timeSinceScroll > 0.5 && timeSinceData > 0.5 {
-                                        shouldAutoScroll = false
-                                    }
-                                }
                         }
                     }
                     .padding(.vertical, 12)
@@ -400,7 +399,7 @@ struct LyricModeMainView: View {
                     if shouldAutoScroll {
                         lastAutoScrollTime = Date()
                         withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo("bottom", anchor: .bottom)
+                            proxy.scrollTo("top", anchor: .top)
                         }
                     }
                 }
@@ -409,21 +408,21 @@ struct LyricModeMainView: View {
                     if shouldAutoScroll {
                         lastAutoScrollTime = Date()
                         withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo("bottom", anchor: .bottom)
+                            proxy.scrollTo("top", anchor: .top)
                         }
                     }
                 }
                 
-                // Resume Auto-Scroll Button
+                // Resume Auto-Scroll Button (now scrolls to top)
                 if !shouldAutoScroll && (!transcriptSegments.isEmpty || !partialText.isEmpty) {
                     Button(action: {
                         shouldAutoScroll = true
                         lastAutoScrollTime = Date()
                         withAnimation {
-                            proxy.scrollTo("bottom", anchor: .bottom)
+                            proxy.scrollTo("top", anchor: .top)
                         }
                     }) {
-                        Image(systemName: "arrow.down.circle.fill")
+                        Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 32))
                             .symbolRenderingMode(.hierarchical)
                             .foregroundStyle(.blue)
@@ -941,7 +940,7 @@ struct LyricModeMainView: View {
         }
         
         // Check for duplicates with last segment
-        if let lastSegment = transcriptSegments.last {
+        if settings.deduplicationEnabled, let lastSegment = transcriptSegments.last {
             if TranscriptTextProcessor.isDuplicate(trimmedText, of: lastSegment) {
                 return
             }
@@ -981,15 +980,17 @@ struct LyricModeMainView: View {
         // Check if new segment is too similar to any existing segment (>70% similarity)
         // If similar, REPLACE with the longer version instead of skipping
         // Search only RECENT segments to allow repeats
-        if let similarIndex = findMostSimilarSegment(trimmedText, threshold: 0.7) {
-            // Replace with the longer version
-            if trimmedText.count >= transcriptSegments[similarIndex].count {
-                if transcriptSegments[similarIndex] != trimmedText {
-                    transcriptSegments[similarIndex] = trimmedText
-                    translateSegment(at: similarIndex, text: trimmedText)
+        if settings.similarityReplacementEnabled {
+            if let similarIndex = findMostSimilarSegment(trimmedText, threshold: 0.7) {
+                // Replace with the longer version
+                if trimmedText.count >= transcriptSegments[similarIndex].count {
+                    if transcriptSegments[similarIndex] != trimmedText {
+                        transcriptSegments[similarIndex] = trimmedText
+                        translateSegment(at: similarIndex, text: trimmedText)
+                    }
                 }
+                return
             }
-            return
         }
         
         // Normal case: append as new paragraph
@@ -1143,6 +1144,10 @@ struct LyricModeSettingsPopup: View {
     @State private var localSpeakerDiarizationEnabled: Bool = false
     @State private var localDiarizationBackend: DiarizationBackend = .fluidAudio
     
+    // Segment Processing
+    @State private var localDeduplicationEnabled: Bool = true
+    @State private var localSimilarityReplacementEnabled: Bool = true
+    
     // AI Provider state
     @State private var localAIProvider: String = "ollama"
     @State private var localOllamaBaseURL: String = "http://localhost:11434"
@@ -1182,6 +1187,9 @@ struct LyricModeSettingsPopup: View {
                     if true {  // Always show behavior section
                         Divider()
                         behaviorSection
+                        
+                        Divider()
+                        segmentProcessingSection
                     }
                     
                     Divider()
@@ -1236,6 +1244,10 @@ struct LyricModeSettingsPopup: View {
             // Speaker diarization
             localSpeakerDiarizationEnabled = settings.speakerDiarizationEnabled
             localDiarizationBackend = settings.diarizationBackend
+            
+            // Segment Processing
+            localDeduplicationEnabled = settings.deduplicationEnabled
+            localSimilarityReplacementEnabled = settings.similarityReplacementEnabled
         }
     }
     
@@ -1261,8 +1273,11 @@ struct LyricModeSettingsPopup: View {
         localPostProcessingModel != settings.postProcessingModel ||
         localPostProcessingTimeout != settings.postProcessingTimeout ||
         localSentenceContinuityEnabled != settings.sentenceContinuityEnabled ||
+        localSentenceContinuityEnabled != settings.sentenceContinuityEnabled ||
         localSpeakerDiarizationEnabled != settings.speakerDiarizationEnabled ||
-        localDiarizationBackend != settings.diarizationBackend
+        localDiarizationBackend != settings.diarizationBackend ||
+        localDeduplicationEnabled != settings.deduplicationEnabled ||
+        localSimilarityReplacementEnabled != settings.similarityReplacementEnabled
     }
     
     private func applySettingsAndDismiss() {
@@ -1305,6 +1320,10 @@ struct LyricModeSettingsPopup: View {
         // Speaker diarization setting
         settings.speakerDiarizationEnabled = localSpeakerDiarizationEnabled
         settings.diarizationBackend = localDiarizationBackend
+        
+        // Segment Processing settings
+        settings.deduplicationEnabled = localDeduplicationEnabled
+        settings.similarityReplacementEnabled = localSimilarityReplacementEnabled
         
         // Notify about changes that need recording restart
         onSettingsApplied?(audioDeviceChanged, engineChanged)
@@ -1783,10 +1802,55 @@ extension LyricModeSettingsPopup {
             
             Toggle("Click-through overlay", isOn: $localIsClickThroughEnabled)
             
-            Toggle("Merge incomplete sentences across paragraphs", isOn: $localSentenceContinuityEnabled)
-                .help("When enabled, sentences without proper ending punctuation (。！？) are merged with the next paragraph")
+            Divider()
+            
+            Toggle("Sentence Continuity", isOn: $localSentenceContinuityEnabled)
+            Text("Automatically merge incomplete sentences")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            if settings.engineType == .appleSpeech {
+                Toggle("Speaker Diarization", isOn: $localSpeakerDiarizationEnabled)
+                Text("Identify different speakers (Experimental)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                if localSpeakerDiarizationEnabled {
+                    Picker("Backend", selection: $localDiarizationBackend) {
+                        ForEach(DiarizationBackend.allCases) { backend in
+                            Label(backend.rawValue, systemImage: backend.icon)
+                                .tag(backend)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.top, 4)
+                    
+                    Text(localDiarizationBackend.description)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
     }
+    
+    private var segmentProcessingSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Segment Processing")
+                .font(.headline)
+             
+            Toggle("De-duplication", isOn: $localDeduplicationEnabled)
+            Text("Prevents creating duplicate segments if the new text overlaps or matches the previous one.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                
+            Toggle("Similarity Replacement", isOn: $localSimilarityReplacementEnabled)
+            Text("Replaces an existing segment if a new one is >70% similar (treating it as a correction).")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+
     
     // MARK: - AI Provider Integration
     
