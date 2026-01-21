@@ -32,6 +32,12 @@ struct LyricModeMainView: View {
     
     // Track segments created by Live Translation mode to avoid duplicates
     @State private var liveTranslationCreatedSegments: Set<String> = []
+    
+    // Track in-flight translation requests to avoid duplicates (index -> text)
+    @State private var pendingTranslations: [Int: String] = [:]
+    
+    // Track which segments are showing original (pre-correction) text
+    @State private var showingOriginal: Set<Int> = []
 
     
     private let translationService = LyricModeTranslationService()
@@ -46,6 +52,11 @@ struct LyricModeMainView: View {
     private var translatedSegments: [String] {
         get { lyricModeManager.translatedSegments }
         nonmutating set { lyricModeManager.translatedSegments = newValue }
+    }
+    
+    private var originalTextMap: [String: String] {
+        get { lyricModeManager.originalTextMap }
+        nonmutating set { lyricModeManager.originalTextMap = newValue }
     }
     
     private var partialText: String {
@@ -309,8 +320,7 @@ struct LyricModeMainView: View {
                         } else {
                             // Display each transcript segment as a paragraph
                             // Display each transcript segment as a paragraph
-                            ForEach(0..<transcriptSegments.count, id: \.self) { index in
-                                let segment = transcriptSegments[index]
+                            ForEach(Array(transcriptSegments.enumerated()), id: \.offset) { index, segment in
                                 SegmentRowView(
                                     index: index,
                                     segment: segment,
@@ -319,6 +329,9 @@ struct LyricModeMainView: View {
                                     isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty,
                                     isIgnored: ignoredSegments.contains(index),
                                     translationEnabled: settings.translationEnabled,
+                                    originalText: originalTextMap[segment] ?? "",
+                                    isShowingOriginal: showingOriginal.contains(index),
+                                    postProcessingEnabled: settings.postProcessingEnabled,
                                     onCopy: {
                                         NSPasteboard.general.clearContents()
                                         NSPasteboard.general.setString(segment, forType: .string)
@@ -334,6 +347,13 @@ struct LyricModeMainView: View {
                                         } else {
                                             ignoredSegments.insert(index)
                                             showToastMessage("Segment ignored", icon: "eye.slash", color: .orange)
+                                        }
+                                    },
+                                    onToggleOriginal: {
+                                        if showingOriginal.contains(index) {
+                                            showingOriginal.remove(index)
+                                        } else {
+                                            showingOriginal.insert(index)
                                         }
                                     }
                                 )
@@ -750,6 +770,8 @@ struct LyricModeMainView: View {
              await translationService.cancelPendingRequests()
         }
         translationService.clearHistory()
+        liveTranslationCreatedSegments.removeAll()
+        pendingTranslations.removeAll()
         partialText = ""
         recordingDuration = 0
         isPaused = false
@@ -776,16 +798,24 @@ struct LyricModeMainView: View {
             .receive(on: DispatchQueue.main)
             .sink { [self] text in
                 // Skip if this segment was already created by Live Translation mode
+                // Only skip if it matches the LAST segment (correction/update)
+                // If it creates a new duplicate of an OLD segment, we treat it as new.
                 if settings.translateImmediately && liveTranslationCreatedSegments.contains(text) {
-                    // Already processed by live translation, just update if needed
-                    if let existingIndex = transcriptSegments.firstIndex(where: { 
-                        TranscriptTextProcessor.similarityRatio($0, text) > 0.7 
-                    }) {
-                        // Replace with the final version (more accurate)
-                        transcriptSegments[existingIndex] = text
-                        translateSegment(at: existingIndex, text: text)
-                    }
-                    return
+                     if let lastIndex = transcriptSegments.indices.last {
+                         // Check similarity with last segment
+                         if TranscriptTextProcessor.similarityRatio(transcriptSegments[lastIndex], text) > 0.7 {
+                             // It matches the last segment -> Update it if changed
+                             if transcriptSegments[lastIndex] != text {
+                                 transcriptSegments[lastIndex] = text
+                                 translateSegment(at: lastIndex, text: text)
+                             }
+                             return
+                         }
+                     } else {
+                         // No segments yet, but it's in created set? Treat as new.
+                     }
+                     // If we are here, it doesn't match the last segment. 
+                     // It might be a repeated phrase. Fall through to processNewTranscriptSegment.
                 }
                 processNewTranscriptSegment(text)
             }
@@ -818,6 +848,14 @@ struct LyricModeMainView: View {
                 syncTranslatedSegmentsCount()
             }
             .store(in: &cancellables)
+        
+        // Subscribe to original (pre-correction) text mapping for "Show original" feature
+        lyricModeManager.originalTranscriptionPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [self] mapping in
+                originalTextMap[mapping.corrected] = mapping.original
+            }
+            .store(in: &cancellables)
     }
     
     private func processLiveTranslation(from text: String) {
@@ -836,8 +874,10 @@ struct LyricModeMainView: View {
                 }
             }
             // Double check duplicate with text processor helper
-            let allConfirmed = transcriptSegments.joined(separator: " ")
-            if TranscriptTextProcessor.isDuplicate(sentence, of: allConfirmed) {
+            // Only check against recent history (last 3 segments) to allow repeating phrases
+            let recentSegments = transcriptSegments.suffix(3)
+            let recentContext = recentSegments.joined(separator: " ")
+            if TranscriptTextProcessor.isDuplicate(sentence, of: recentContext) {
                 continue
             }
             
@@ -884,8 +924,10 @@ struct LyricModeMainView: View {
             // Then check for "fuzzy" replacement (normalized content match)
             if TranscriptTextProcessor.isReplacementOf(trimmedText, existingText: lastSegment) {
                  // It's a correction! Replace the last segment.
-                 transcriptSegments[lastIndex] = trimmedText
-                 translateSegment(at: lastIndex, text: trimmedText)
+                 if transcriptSegments[lastIndex] != trimmedText {
+                     transcriptSegments[lastIndex] = trimmedText
+                     translateSegment(at: lastIndex, text: trimmedText)
+                 }
                  return
             }
         }
@@ -938,11 +980,14 @@ struct LyricModeMainView: View {
         
         // Check if new segment is too similar to any existing segment (>70% similarity)
         // If similar, REPLACE with the longer version instead of skipping
+        // Search only RECENT segments to allow repeats
         if let similarIndex = findMostSimilarSegment(trimmedText, threshold: 0.7) {
             // Replace with the longer version
             if trimmedText.count >= transcriptSegments[similarIndex].count {
-                transcriptSegments[similarIndex] = trimmedText
-                translateSegment(at: similarIndex, text: trimmedText)
+                if transcriptSegments[similarIndex] != trimmedText {
+                    transcriptSegments[similarIndex] = trimmedText
+                    translateSegment(at: similarIndex, text: trimmedText)
+                }
             }
             return
         }
@@ -957,7 +1002,13 @@ struct LyricModeMainView: View {
     private func findMostSimilarSegment(_ newText: String, threshold: Double) -> Int? {
         var bestMatch: (Int, Double)? = nil
         
-        for (index, segment) in transcriptSegments.enumerated() {
+        // Optimization: Only check the last 10 segments for similarity merging
+        // This prevents modifying valid repeated phrases from much earlier
+        let checkCount = 10
+        let startIndex = max(0, transcriptSegments.count - checkCount)
+        
+        for index in startIndex..<transcriptSegments.count {
+            let segment = transcriptSegments[index]
             let similarity = TranscriptTextProcessor.similarityRatio(newText, segment)
             if similarity > threshold {
                 if bestMatch == nil || similarity > bestMatch!.1 {
@@ -981,9 +1032,27 @@ struct LyricModeMainView: View {
         guard settings.translationEnabled else { return }
         guard lyricModeManager.isRecording && !isPaused else { return }
         
+        // Skip if this exact text is already being translated for this index
+        if pendingTranslations[index] == text {
+            print("[Translation] Skipping duplicate request for index \(index)")
+            return
+        }
+        
         syncTranslatedSegmentsCount()
         
+        // Mark as pending
+        pendingTranslations[index] = text
+        
         Task {
+            defer {
+                // Clean up pending state on main thread
+                Task { @MainActor in
+                    if pendingTranslations[index] == text {
+                        pendingTranslations.removeValue(forKey: index)
+                    }
+                }
+            }
+            
             do {
                 let translation = try await translationService.translate(text)
                 await MainActor.run {
@@ -1928,10 +1997,16 @@ struct SegmentRowView: View, Equatable {
     let isIgnored: Bool
     let translationEnabled: Bool
     
+    // Show Original feature
+    let originalText: String
+    let isShowingOriginal: Bool
+    let postProcessingEnabled: Bool
+    
     // Use stored closures that don't capture View state to allow equality checks
     let onCopy: () -> Void
     let onRetranslate: () -> Void
     let onToggleIgnore: () -> Void
+    let onToggleOriginal: () -> Void
     
     @State private var isHovering = false
     
@@ -1942,19 +2017,33 @@ struct SegmentRowView: View, Equatable {
                lhs.fontSize == rhs.fontSize &&
                lhs.isLatest == rhs.isLatest &&
                lhs.isIgnored == rhs.isIgnored &&
-               lhs.translationEnabled == rhs.translationEnabled
+               lhs.translationEnabled == rhs.translationEnabled &&
+               lhs.originalText == rhs.originalText &&
+               lhs.isShowingOriginal == rhs.isShowingOriginal &&
+               lhs.postProcessingEnabled == rhs.postProcessingEnabled
     }
     
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             // Main content
             VStack(alignment: .leading, spacing: 4) {
+                // Show original text when toggled, otherwise show corrected segment
+                let displayText = isShowingOriginal && !originalText.isEmpty ? originalText : segment
+                
                 TranscriptParagraphView(
-                    text: segment,
+                    text: displayText,
                     fontSize: fontSize,
                     isLatest: isLatest
                 )
                 .opacity(isIgnored ? 0.5 : 1.0)
+                
+                // Show "Showing original" indicator when in original mode
+                if isShowingOriginal && !originalText.isEmpty {
+                    Text("(Showing original)")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 31)
+                }
                 
                 // Show translation if enabled and available
                 if translationEnabled && !translation.isEmpty {
@@ -1994,6 +2083,20 @@ struct SegmentRowView: View, Equatable {
                     }
                     .buttonStyle(.plain)
                     .help("Retranslate")
+                }
+                
+                // Show Original/Corrected toggle button (only if post-processing enabled and has original)
+                if postProcessingEnabled && !originalText.isEmpty {
+                    Button(action: onToggleOriginal) {
+                        Image(systemName: isShowingOriginal ? "text.badge.checkmark" : "text.badge.minus")
+                            .font(.system(size: 12))
+                            .foregroundColor(isShowingOriginal ? .orange : .secondary)
+                            .frame(width: 24, height: 24)
+                            .background(Color.gray.opacity(0.2))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(isShowingOriginal ? "Show corrected" : "Show original")
                 }
                 
                 // Ignore/Unignore button

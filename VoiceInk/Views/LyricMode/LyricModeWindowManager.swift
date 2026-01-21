@@ -21,6 +21,10 @@ final class LyricModeWindowManager: ObservableObject {
     // Publishers for transcription updates
     let transcriptionPublisher = PassthroughSubject<String, Never>()
     let partialTranscriptionPublisher = PassthroughSubject<String, Never>()
+    let originalTranscriptionPublisher = PassthroughSubject<(corrected: String, original: String), Never>()
+    
+    // Original (pre-correction) text mapping: corrected text -> original text
+    @Published var originalTextMap: [String: String] = [:]
     
     // MARK: - Dependencies
     
@@ -149,6 +153,7 @@ final class LyricModeWindowManager: ObservableObject {
         
         // Clear transcript data to prevent stale state
         transcriptSegments = []
+        originalTextMap = [:]
         
         stopTimer()
         
@@ -240,6 +245,15 @@ final class LyricModeWindowManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] text in
                 self?.partialTranscriptionPublisher.send(text)
+            }
+            .store(in: &cancellables)
+        
+        // Forward original (pre-correction) text mapping for "Show original" feature
+        service.originalTranscriptionPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] mapping in
+                self?.originalTextMap[mapping.corrected] = mapping.original
+                self?.originalTranscriptionPublisher.send(mapping)
             }
             .store(in: &cancellables)
     }

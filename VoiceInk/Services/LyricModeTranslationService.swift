@@ -106,7 +106,10 @@ class LyricModeTranslationService {
         messages.append(contentsOf: messageHistory)
         
         // Add current translation request
-        let userMessage = "Translate to \(targetLanguage): \(text)"
+        let userMessage = """
+            You are a professional Japanese (ja) to \(targetLanguage) translator. Your goal is to accurately convey the meaning and nuances of the original Japanese text while adhering to \(targetLanguage) grammar, vocabulary, and cultural sensitivities.
+            Produce only the \(targetLanguage) translation, without any additional explanations or commentary. Please translate the following Japanese text into \(targetLanguage): \(text)
+            """
         messages.append(["role": "user", "content": userMessage])
         
         let body: [String: Any] = [

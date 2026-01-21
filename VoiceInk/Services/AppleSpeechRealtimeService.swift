@@ -20,6 +20,9 @@ final class AppleSpeechRealtimeService: ObservableObject {
     /// Publisher for finalized transcription segments
     let transcriptionPublisher = PassthroughSubject<String, Never>()
     
+    /// Publisher for original (pre-correction) text mapping: (corrected, original)
+    let originalTranscriptionPublisher = PassthroughSubject<(corrected: String, original: String), Never>()
+    
     /// Publisher that fires when content is cleared
     let clearedPublisher = PassthroughSubject<Void, Never>()
     
@@ -312,8 +315,9 @@ final class AppleSpeechRealtimeService: ObservableObject {
                         // Correct text using LLM if enabled in settings
                         var textToEmit = finalText
                         let lyricSettings = LyricModeSettings.shared
+                        let postProcessingEnabled = lyricSettings.postProcessingEnabled
                         
-                        if #available(macOS 14.0, *), lyricSettings.postProcessingEnabled {
+                        if #available(macOS 14.0, *), postProcessingEnabled {
                              // Run correction asynchronously but wait for it to maintain order
                              do {
                                  textToEmit = try await LLMTextCorrector.shared.correctText(
@@ -330,6 +334,11 @@ final class AppleSpeechRealtimeService: ObservableObject {
                         await MainActor.run {
                             self.transcript += textToEmit
                             self.transcriptionPublisher.send(textToEmit)
+                            
+                            // Emit original text mapping for "Show original" feature
+                            if postProcessingEnabled {
+                                self.originalTranscriptionPublisher.send((corrected: textToEmit, original: finalText))
+                            }
                         }
                         shippedPrefixLength = text.count - remainderText.count
                     }
