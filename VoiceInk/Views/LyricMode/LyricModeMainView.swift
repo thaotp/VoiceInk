@@ -27,6 +27,9 @@ struct LyricModeMainView: View {
     @State private var showingWindowSelection = false
     @StateObject private var teamsService = TeamsLiveCaptionsService()
     
+    // ChatGPT browser service
+    @ObservedObject private var chatGPTBrowser = ChatGPTBrowserService.shared
+    
     // Segment management
     @State private var ignoredSegments: Set<Int> = []
     
@@ -209,6 +212,15 @@ struct LyricModeMainView: View {
             }
             .buttonStyle(.plain)
             .help(settings.translationEnabled ? "Hide Translation" : "Show Translation")
+            
+            // ChatGPT browser toggle
+            Button(action: { chatGPTBrowser.toggleVisibility(show: !chatGPTBrowser.isVisible) }) {
+                Image(systemName: chatGPTBrowser.isVisible ? "globe.badge.chevron.backward" : "globe")
+                    .font(.title3)
+                    .foregroundColor(chatGPTBrowser.isVisible ? .green : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(chatGPTBrowser.isVisible ? "Hide ChatGPT" : "Show ChatGPT")
             
             // Overlay toggle
             Button(action: { lyricModeManager.toggleOverlay() }) {
