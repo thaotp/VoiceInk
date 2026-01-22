@@ -41,6 +41,32 @@ enum DiarizationBackend: String, CaseIterable, Identifiable {
     }
 }
 
+/// Translation provider options for Lyric Mode
+enum TranslationProvider: String, CaseIterable, Identifiable {
+    case ollama = "Ollama"
+    case chatGPT = "ChatGPT"
+    
+    var id: String { rawValue }
+    
+    var description: String {
+        switch self {
+        case .ollama:
+            return "Local AI translation using Ollama"
+        case .chatGPT:
+            return "OpenAI's ChatGPT via browser"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .ollama:
+            return "server.rack"
+        case .chatGPT:
+            return "globe"
+        }
+    }
+}
+
 /// Settings model for Lyric Mode appearance and behavior
 class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.maxVisibleLines") var maxVisibleLines: Int = 5
@@ -88,6 +114,12 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.translationEnabled") var translationEnabled: Bool = true
     @AppStorage("lyricMode.translateImmediately") var translateImmediately: Bool = false
     @AppStorage("lyricMode.targetLanguage") var targetLanguage: String = "Vietnamese"
+    @AppStorage("lyricMode.translationProviderRaw") var translationProviderRaw: String = TranslationProvider.ollama.rawValue
+    
+    var translationProvider: TranslationProvider {
+        get { TranslationProvider(rawValue: translationProviderRaw) ?? .ollama }
+        set { translationProviderRaw = newValue.rawValue }
+    }
     
     // Sentence continuity setting
     @AppStorage("lyricMode.sentenceContinuityEnabled") var sentenceContinuityEnabled: Bool = true

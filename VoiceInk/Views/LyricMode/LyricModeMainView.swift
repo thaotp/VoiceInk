@@ -1067,7 +1067,15 @@ struct LyricModeMainView: View {
             }
             
             do {
-                let translation = try await translationService.translate(text)
+                let translation: String
+                
+                // Check which provider to use
+                if settings.translationProvider == .chatGPT {
+                    translation = try await translateWithChatGPT(text)
+                } else {
+                    translation = try await translationService.translate(text)
+                }
+                
                 await MainActor.run {
                     if index < translatedSegments.count {
                         translatedSegments[index] = translation
@@ -1077,6 +1085,71 @@ struct LyricModeMainView: View {
                 print("Translation error: \(error.localizedDescription)")
             }
         }
+    }
+    
+    /// Translate text using ChatGPT browser service
+    private func translateWithChatGPT(_ text: String) async throws -> String {
+        let browser = ChatGPTBrowserService.shared
+        
+        // Check if logged in
+        guard browser.isLoggedIn else {
+            print("[ChatGPT Translation] Not logged in, showing browser")
+            await MainActor.run {
+                browser.show()
+                showToastMessage("Please login to ChatGPT", icon: "person.crop.circle.badge.exclamationmark", color: .orange)
+            }
+            throw TranslationError.notConnected
+        }
+        
+        // Build translation prompt
+        let targetLanguage = settings.targetLanguage
+        let prompt = "Translate the following Japanese text to \(targetLanguage). Output ONLY the translation, no explanations:\n\n\(text)"
+        
+        // Send message to ChatGPT
+        let sendResult = await browser.sendMessage(prompt)
+        
+        guard case .success = sendResult else {
+            print("[ChatGPT Translation] Failed to send message: \(sendResult)")
+            throw TranslationError.invalidResponse
+        }
+        
+        // Start streaming observer
+        await browser.startStreamingObserver()
+        
+        // Wait for response with timeout
+        var translation = ""
+        let maxWaitTime: TimeInterval = 30.0
+        let startTime = Date()
+        
+        while Date().timeIntervalSince(startTime) < maxWaitTime {
+            // Check if streaming is complete
+            if !browser.isStreaming && !browser.streamingText.isEmpty {
+                translation = browser.streamingText
+                break
+            }
+            
+            // Update translation from streaming text
+            if !browser.streamingText.isEmpty {
+                translation = browser.streamingText
+            }
+            
+            // Small delay to avoid busy waiting
+            try await Task.sleep(nanoseconds: 200_000_000) // 200ms
+        }
+        
+        // Stop observer
+        await browser.stopStreamingObserver()
+        
+        // Get final response if streaming didn't capture it
+        if translation.isEmpty {
+            translation = await browser.getLastResponse() ?? ""
+        }
+        
+        guard !translation.isEmpty else {
+            throw TranslationError.invalidResponse
+        }
+        
+        return translation.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
     /// Retranslate a segment (forces re-translation by clearing first)
@@ -1096,7 +1169,15 @@ struct LyricModeMainView: View {
         
         Task {
             do {
-                let translation = try await translationService.translate(text)
+                let translation: String
+                
+                // Check which provider to use
+                if settings.translationProvider == .chatGPT {
+                    translation = try await translateWithChatGPT(text)
+                } else {
+                    translation = try await translationService.translate(text)
+                }
+                
                 await MainActor.run {
                     if index < translatedSegments.count {
                         translatedSegments[index] = translation
@@ -1172,6 +1253,7 @@ struct LyricModeSettingsPopup: View {
     @State private var localTranslationEnabled: Bool = false
     @State private var localTargetLanguage: String = "Vietnamese"
     @State private var localTranslateImmediately: Bool = false
+    @State private var localTranslationProvider: TranslationProvider = .ollama
     
     // Post-Processing state
     @State private var localPostProcessingEnabled: Bool = false
@@ -1244,6 +1326,7 @@ struct LyricModeSettingsPopup: View {
             localTranslationEnabled = settings.translationEnabled
             localTargetLanguage = settings.targetLanguage
             localTranslateImmediately = settings.translateImmediately
+            localTranslationProvider = settings.translationProvider
             
             // Post-Processing
             localPostProcessingEnabled = settings.postProcessingEnabled
@@ -1281,6 +1364,7 @@ struct LyricModeSettingsPopup: View {
         localTranslationEnabled != settings.translationEnabled ||
         localTargetLanguage != settings.targetLanguage ||
         localTranslateImmediately != settings.translateImmediately ||
+        localTranslationProvider != settings.translationProvider ||
         localPostProcessingEnabled != settings.postProcessingEnabled ||
         localPostProcessingModel != settings.postProcessingModel ||
         localPostProcessingTimeout != settings.postProcessingTimeout ||
@@ -1320,6 +1404,7 @@ struct LyricModeSettingsPopup: View {
         settings.translationEnabled = localTranslationEnabled
         settings.targetLanguage = localTargetLanguage
         settings.translateImmediately = localTranslateImmediately
+        settings.translationProvider = localTranslationProvider
         
         // Post-Processing settings
         settings.postProcessingEnabled = localPostProcessingEnabled
@@ -1950,6 +2035,48 @@ extension LyricModeSettingsPopup {
                 Toggle("Enable Translation", isOn: $localTranslationEnabled)
                 
                 if localTranslationEnabled {
+                    // Translation Provider Picker
+                    HStack {
+                        Text("Provider")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        Spacer()
+                        
+                        Picker("Provider", selection: $localTranslationProvider) {
+                            ForEach(TranslationProvider.allCases) { provider in
+                                Label(provider.rawValue, systemImage: provider.icon)
+                                    .tag(provider)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 200)
+                    }
+                    
+                    // ChatGPT-specific: Login button
+                    if localTranslationProvider == .chatGPT {
+                        HStack {
+                            if ChatGPTBrowserService.shared.isLoggedIn {
+                                Label("Logged in to ChatGPT", systemImage: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                    .font(.caption)
+                            } else {
+                                Label("Not logged in", systemImage: "exclamationmark.circle")
+                                    .foregroundColor(.orange)
+                                    .font(.caption)
+                            }
+                            
+                            Spacer()
+                            
+                            Button(ChatGPTBrowserService.shared.isVisible ? "Hide Browser" : "Login to ChatGPT") {
+                                ChatGPTBrowserService.shared.toggleVisibility(show: !ChatGPTBrowserService.shared.isVisible)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                    
                     HStack {
                         Text("Target Language")
                             .font(.subheadline)
@@ -1972,7 +2099,9 @@ extension LyricModeSettingsPopup {
                         .labelsHidden()
                     }
                     
-                    Text("Each paragraph will be translated using the selected AI model")
+                    Text(localTranslationProvider == .ollama 
+                        ? "Each paragraph will be translated using Ollama"
+                        : "Each paragraph will be translated using ChatGPT")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
