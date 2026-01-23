@@ -192,8 +192,13 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
         hiddenWindow.isReleasedWhenClosed = false  // Keep window alive when closed
         hiddenWindow.delegate = self
         
-        // Keep it hidden but not deallocated
-        hiddenWindow.orderOut(nil)
+        // Prevent window from appearing in Mission Control or Cycle Windows
+        hiddenWindow.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
+        
+        // Initial state: Stealth Mode
+        hiddenWindow.alphaValue = 0.0
+        hiddenWindow.ignoresMouseEvents = true
+        hiddenWindow.makeKeyAndOrderFront(nil) // Keep it "visible" to system
     }
     
     private func setupObservers() {
@@ -230,15 +235,21 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
         
         if show {
             // Center the window on screen and bring to front
+            hiddenWindow.alphaValue = 1.0
+            hiddenWindow.ignoresMouseEvents = false
             hiddenWindow.center()
             hiddenWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             print("[ChatGPTBrowser] Window shown for user interaction")
         } else {
-            // Move off-screen and hide
+            // "Stealth Mode": Keep window "visible" to system but invisible to user
+            // This prevents WebKit from suspending the process/JS execution
+            hiddenWindow.alphaValue = 0.0
+            hiddenWindow.ignoresMouseEvents = true
             hiddenWindow.setFrameOrigin(offScreenPosition)
-            hiddenWindow.orderOut(nil)
-            print("[ChatGPTBrowser] Window hidden (stealth mode)")
+            // Do NOT call orderOut(nil) as it causes process suspension
+            // hiddenWindow.orderBack(nil) // Optional: move to back
+            print("[ChatGPTBrowser] Window entered stealth mode (alpha 0, off-screen)")
         }
     }
     
@@ -250,6 +261,32 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
     /// Hide the browser window (convenience method)
     func hide() {
         toggleVisibility(show: false)
+    }
+    
+    // MARK: - Streaming State (Network Interceptor based)
+    
+    /// Check if ChatGPT is currently streaming a response
+    /// Uses the fetch interceptor's activeStreamCount for reliable detection
+    var isStreamingActive: Bool {
+        return activeStreamCount > 0 || isInterceptorActive
+    }
+    
+    /// Wait for any active streaming to finish before proceeding
+    /// - Parameter timeout: Maximum wait time in seconds
+    /// - Returns: true if streaming finished, false if timed out
+    func waitForStreamingToFinish(timeout: TimeInterval = 30) async -> Bool {
+        let startTime = Date()
+        
+        while isStreamingActive {
+            if Date().timeIntervalSince(startTime) > timeout {
+                print("[ChatGPTBrowser] Timeout waiting for streaming to finish")
+                return false
+            }
+            
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        }
+        
+        return true
     }
     
     /// Reload the current page
@@ -915,6 +952,19 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
             return (.error("Page not loaded"), nil)
         }
         
+        // Wait for any active streaming to finish before sending new message
+        // Uses network interceptor (activeStreamCount) for reliable detection
+        if isStreamingActive {
+            print("[ChatGPTBrowser] ChatGPT is busy streaming, waiting for it to finish...")
+            let finished = await waitForStreamingToFinish(timeout: 30)
+            if !finished {
+                print("[ChatGPTBrowser] Timeout waiting for previous stream to finish")
+                // Continue anyway - the previous stream might be stuck
+            } else {
+                print("[ChatGPTBrowser] Previous stream finished, proceeding with new message")
+            }
+        }
+        
         // Generate unique Request ID
         let requestId = UUID().uuidString
         let messageWithId = text + "\n\n[Ref: \(requestId)]"
@@ -1085,6 +1135,26 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
                 for (const selector of selectors) {
                     const el = document.querySelector(selector);
                     if (el) return el;
+                }
+                return null;
+            }
+            
+            /**
+             * Find send button - explicitly excludes stop button via JS attribute check
+             */
+            function findSendButton() {
+                // First try the specific send button selector
+                const sendBtn = document.querySelector("button[data-testid='send-button']");
+                if (sendBtn) return sendBtn;
+                
+                // Try other selectors, but filter out stop button
+                const candidates = document.querySelectorAll("button[aria-label*='Send'], button[aria-label*='send'], form button:not(:disabled)");
+                for (const btn of candidates) {
+                    // Explicitly exclude stop button by checking data-testid
+                    if (btn.getAttribute('data-testid') === 'stop-button') {
+                        continue;
+                    }
+                    return btn;
                 }
                 return null;
             }
@@ -1404,12 +1474,12 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
             // Focus the textarea first
             textarea.focus();
             
-            // Find send button early
+            // Find send button early - ALL selectors must exclude stop button
             const buttonSelectors = [
                 "button[data-testid='send-button']",
-                "button[aria-label*='Send']",
-                "button[aria-label*='send']",
-                "form button:not(:disabled)"
+                "button[aria-label*='Send']:not([data-testid='stop-button'])",
+                "button[aria-label*='send']:not([data-testid='stop-button'])",
+                "form button:not(:disabled):not([data-testid='stop-button'])"
             ];
             
             // Try to find React internals on the element or its parents
@@ -1483,11 +1553,16 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
             // Wait for UI to update, then submit
             return new Promise((resolve) => {
                 const checkButton = (attempts) => {
-                    const sendButton = findElement(buttonSelectors);
-                    
-                    console.log('[ChatGPT-React] Check button attempt', attempts, 
-                                'button:', sendButton, 
-                                'disabled:', sendButton ? sendButton.disabled : 'N/A');
+                    // Safety Check: If Stop button exists, we are definitely busy. Wait.
+                    const stopButton = document.querySelector('button[data-testid="stop-button"]');
+                    if (stopButton) {
+                        console.log('[ChatGPT-React] Stop button found, waiting for generation to finish...');
+                        // Check again in 500ms
+                        setTimeout(() => checkButton(attempts), 500); 
+                        return;
+                    }
+
+                    const sendButton = findSendButton();
                     
                     if (sendButton && !sendButton.disabled) {
                         console.log('[ChatGPT-React] Send button enabled, clicking');
@@ -1524,11 +1599,12 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
                         return;
                     }
                     
-                    if (attempts < 60) { // Try for 3 seconds (50ms * 60)
+                    // Simple short retry just to find the button if it hasn't rendered yet
+                    if (attempts < 20) { // Try for 1 second (50ms * 20)
                         setTimeout(() => checkButton(attempts + 1), 50);
                     } else {
                         // Timeout - try Enter key as last resort
-                        console.log('[ChatGPT-React] Button not enabled after 3s, trying Enter key');
+                        console.log('[ChatGPT-React] Button not enabled after 1s, trying Enter key');
                         
                         textarea.focus();
                         textarea.dispatchEvent(new KeyboardEvent('keydown', {
