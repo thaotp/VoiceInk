@@ -1551,77 +1551,86 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
             }
             
             // Wait for UI to update, then submit
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
                 const checkButton = (attempts) => {
-                    // Safety Check: If Stop button exists, we are definitely busy. Wait.
-                    const stopButton = document.querySelector('button[data-testid="stop-button"]');
-                    if (stopButton) {
-                        console.log('[ChatGPT-React] Stop button found, waiting for generation to finish...');
-                        // Check again in 500ms
-                        setTimeout(() => checkButton(attempts), 500); 
-                        return;
-                    }
+                    try {
+                        // Safety Check: If Stop button exists, we are definitely busy. Wait.
+                        const stopButton = document.querySelector('button[data-testid="stop-button"]');
+                        if (stopButton) {
+                            console.log('[ChatGPT-React] Stop button found, waiting for generation to finish...');
+                            // Check again in 500ms
+                            setTimeout(() => checkButton(attempts), 500); 
+                            return;
+                        }
 
-                    const sendButton = findSendButton();
-                    
-                    if (sendButton && !sendButton.disabled) {
-                        console.log('[ChatGPT-React] Send button enabled, clicking');
+                        const sendButton = findSendButton();
                         
-                        // Try React onClick first
-                        const btnProps = getReactProps(sendButton);
-                        const btnFiber = getReactFiber(sendButton);
-                        let clickHandler = btnProps && btnProps.onClick ? btnProps.onClick : null;
-                        if (!clickHandler && btnFiber) {
-                            clickHandler = findHandlerInFiberTree(btnFiber, 'onClick');
+                        if (sendButton && !sendButton.disabled) {
+                            console.log('[ChatGPT-React] Send button enabled, clicking');
+                            
+                            // Try React onClick first
+                            const btnProps = getReactProps(sendButton);
+                            const btnFiber = getReactFiber(sendButton);
+                            let clickHandler = btnProps && btnProps.onClick ? btnProps.onClick : null;
+                            if (!clickHandler && btnFiber) {
+                                clickHandler = findHandlerInFiberTree(btnFiber, 'onClick');
+                            }
+                            
+                            if (clickHandler) {
+                                console.log('[ChatGPT-React] Using React onClick handler');
+                                const clickEvent = {
+                                    target: sendButton,
+                                    currentTarget: sendButton,
+                                    type: 'click',
+                                    bubbles: true,
+                                    cancelable: true,
+                                    defaultPrevented: false,
+                                    button: 0,
+                                    preventDefault: function() { this.defaultPrevented = true; },
+                                    stopPropagation: function() {},
+                                    persist: function() {}
+                                };
+                                clickHandler(clickEvent);
+                            } else {
+                                // Native click
+                                sendButton.click();
+                            }
+                            
+                            resolve("success");
+                            return;
                         }
                         
-                        if (clickHandler) {
-                            console.log('[ChatGPT-React] Using React onClick handler');
-                            const clickEvent = {
-                                target: sendButton,
-                                currentTarget: sendButton,
-                                type: 'click',
-                                bubbles: true,
-                                cancelable: true,
-                                defaultPrevented: false,
-                                button: 0,
-                                preventDefault: function() { this.defaultPrevented = true; },
-                                stopPropagation: function() {},
-                                persist: function() {}
-                            };
-                            clickHandler(clickEvent);
+                        // Simple short retry just to find the button if it hasn't rendered yet
+                        if (attempts < 20) { // Try for 1 second (50ms * 20)
+                            setTimeout(() => checkButton(attempts + 1), 50);
                         } else {
-                            // Native click
-                            sendButton.click();
+                            // Timeout - try Enter key as last resort
+                            console.log('[ChatGPT-React] Button not enabled after 1s, trying Enter key');
+                            
+                            textarea.focus();
+                            textarea.dispatchEvent(new KeyboardEvent('keydown', {
+                                key: 'Enter',
+                                code: 'Enter',
+                                keyCode: 13,
+                                which: 13,
+                                bubbles: true,
+                                cancelable: true
+                            }));
+                            
+                            resolve("success");
                         }
-                        
-                        resolve("success");
-                        return;
-                    }
-                    
-                    // Simple short retry just to find the button if it hasn't rendered yet
-                    if (attempts < 20) { // Try for 1 second (50ms * 20)
-                        setTimeout(() => checkButton(attempts + 1), 50);
-                    } else {
-                        // Timeout - try Enter key as last resort
-                        console.log('[ChatGPT-React] Button not enabled after 1s, trying Enter key');
-                        
-                        textarea.focus();
-                        textarea.dispatchEvent(new KeyboardEvent('keydown', {
-                            key: 'Enter',
-                            code: 'Enter',
-                            keyCode: 13,
-                            which: 13,
-                            bubbles: true,
-                            cancelable: true
-                        }));
-                        
-                        resolve("success");
+                    } catch (error) {
+                         console.error('[ChatGPT-React] Error in checkButton:', error);
+                         reject(error.toString());
                     }
                 };
                 
                 // Start checking after a short delay
-                setTimeout(() => checkButton(0), 100);
+                try {
+                    setTimeout(() => checkButton(0), 100);
+                } catch (error) {
+                    reject(error.toString());
+                }
             });
         })();
         """
