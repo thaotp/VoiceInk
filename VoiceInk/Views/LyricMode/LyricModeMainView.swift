@@ -654,6 +654,12 @@ struct LyricModeMainView: View {
     private func startRecordingAfterWindowSelection() async {
         do {
             isPaused = false
+            
+            // If using ChatGPT for translation, start a new chat session
+            if settings.translationEnabled && settings.translationProvider == .chatGPT {
+                await ChatGPTBrowserService.shared.startNewChatSession()
+            }
+            
             try await lyricModeManager.startRecording(with: whisperState)
             subscribeToTranscription()
             
@@ -1057,32 +1063,35 @@ struct LyricModeMainView: View {
         pendingTranslations[index] = text
         
         Task {
-            defer {
-                // Clean up pending state on main thread
-                Task { @MainActor in
-                    if pendingTranslations[index] == text {
-                        pendingTranslations.removeValue(forKey: index)
+            // Serialize all translations to prevent browser concurrency issues
+            await TranslationQueue.shared.enqueue {
+                defer {
+                    // Clean up pending state on main thread
+                    Task { @MainActor in
+                        if self.pendingTranslations[index] == text {
+                            self.pendingTranslations.removeValue(forKey: index)
+                        }
                     }
                 }
-            }
-            
-            do {
-                let translation: String
                 
-                // Check which provider to use
-                if settings.translationProvider == .chatGPT {
-                    translation = try await translateWithChatGPT(text)
-                } else {
-                    translation = try await translationService.translate(text)
-                }
-                
-                await MainActor.run {
-                    if index < translatedSegments.count {
-                        translatedSegments[index] = translation
+                do {
+                    let translation: String
+                    
+                    // Check which provider to use
+                    if self.settings.translationProvider == .chatGPT {
+                        translation = try await self.translateWithChatGPT(text)
+                    } else {
+                        translation = try await self.translationService.translate(text)
                     }
+                    
+                    await MainActor.run {
+                        if index < self.translatedSegments.count {
+                            self.translatedSegments[index] = translation
+                        }
+                    }
+                } catch {
+                    print("Translation error: \(error.localizedDescription)")
                 }
-            } catch {
-                print("Translation error: \(error.localizedDescription)")
             }
         }
     }
@@ -1101,55 +1110,102 @@ struct LyricModeMainView: View {
             throw TranslationError.notConnected
         }
         
-        // Build translation prompt
+        // Generate unique Content ID for this specific translation
+        let contentId = UUID().uuidString.prefix(8) // Short ID is enough
+        
+        // Build translation prompt with Content ID instruction
         let targetLanguage = settings.targetLanguage
-        let prompt = "Translate the following Japanese text to \(targetLanguage). Output ONLY the translation, no explanations:\n\n\(text)"
+        let prompt = """
+        Translate the following text to \(targetLanguage).
+        IMPORTANT: Start your response EXACTLY with "[ID:\(contentId)] " followed by the translation.
+        
+        Text:
+        \(text)
+        """
         
         // Send message to ChatGPT
-        let sendResult = await browser.sendMessage(prompt)
+        let (sendResult, requestId) = await browser.sendMessage(prompt)
         
         guard case .success = sendResult else {
             print("[ChatGPT Translation] Failed to send message: \(sendResult)")
             throw TranslationError.invalidResponse
         }
         
-        // Start streaming observer
-        await browser.startStreamingObserver()
+        // Wait for ChatGPT to start generating response
+        try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds initial wait
         
-        // Wait for response with timeout
+        // Poll for response with timeout - extended for reasoning models
         var translation = ""
-        let maxWaitTime: TimeInterval = 30.0
+        let maxWaitTime: TimeInterval = 60.0 // Increased to 60s for "Thinking" models
         let startTime = Date()
+        var lastFoundText = ""
+        var stableCount = 0
         
         while Date().timeIntervalSince(startTime) < maxWaitTime {
-            // Check if streaming is complete
-            if !browser.isStreaming && !browser.streamingText.isEmpty {
-                translation = browser.streamingText
-                break
+            // Try to get the response using getLastResponse with strict Request ID matching
+            if let response = await browser.getLastResponse(forRequestId: requestId) {
+                // Check if this is a new response (not our prompt)
+                let cleanedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
+                
+                // Skip if empty
+                if !cleanedResponse.isEmpty {
+                     // CONTENT ID VERIFICATION
+                     // Check if response contains our expected Content ID
+                     let expectedTag = "[ID:\(contentId)]"
+                     
+                     if let range = cleanedResponse.range(of: expectedTag) {
+                         // ID found! Extract content after it
+                         let content = String(cleanedResponse[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                         
+                         // Update translation if we have content
+                         if !content.isEmpty {
+                             translation = content
+                         } else {
+                             // ID found but no content yet (just started typing)
+                             continue
+                         }
+                         
+                         // Check stability on the EXTRACTED content
+                         if content == lastFoundText {
+                             stableCount += 1
+                             if stableCount >= 3 {
+                                 print("[ChatGPT Translation] Response stabilized and ID verified")
+                                 break
+                             }
+                         } else {
+                             stableCount = 0
+                             lastFoundText = content
+                         }
+                     } else {
+                         // ID not found yet (maybe reasoning or preamble)
+                         // Keep waiting for the specific format
+                         // print("[ChatGPT Translation] Waiting for ID tag: \(expectedTag)")
+                     }
+                }
             }
             
-            // Update translation from streaming text
-            if !browser.streamingText.isEmpty {
-                translation = browser.streamingText
-            }
-            
-            // Small delay to avoid busy waiting
-            try await Task.sleep(nanoseconds: 200_000_000) // 200ms
-        }
-        
-        // Stop observer
-        await browser.stopStreamingObserver()
-        
-        // Get final response if streaming didn't capture it
-        if translation.isEmpty {
-            translation = await browser.getLastResponse() ?? ""
+            // Wait before next poll
+            try await Task.sleep(nanoseconds: 500_000_000) // 500ms
         }
         
         guard !translation.isEmpty else {
+            print("[ChatGPT Translation] No verified response captured after timeout")
             throw TranslationError.invalidResponse
         }
         
-        return translation.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Clean up the translation (remove any trailing markers we added)
+        var cleanedTranslation = translation
+        // Remove Request ID if present (from the network layer)
+        if let range = cleanedTranslation.range(of: "\n\n[Ref:", options: .backwards) {
+            cleanedTranslation = String(cleanedTranslation[..<range.lowerBound])
+        }
+        
+        // Remove generic labels if still present
+        if cleanedTranslation.hasPrefix("ChatGPT:") {
+            cleanedTranslation = String(cleanedTranslation.dropFirst(8)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        return cleanedTranslation.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
     /// Retranslate a segment (forces re-translation by clearing first)
