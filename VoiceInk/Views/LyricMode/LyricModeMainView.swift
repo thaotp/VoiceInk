@@ -1116,7 +1116,7 @@ struct LyricModeMainView: View {
         // Build translation prompt with Content ID instruction
         let targetLanguage = settings.targetLanguage
         let prompt = """
-        Translate the following text to \(targetLanguage).
+        Translate the following text to \(targetLanguage). Leverage the context from previous sentences and optimize it so that the Vietnamese reads as naturally as possible.
         IMPORTANT: Start your response EXACTLY with "[ID:\(contentId)] " followed by the translation.
         
         Text:
@@ -1143,7 +1143,7 @@ struct LyricModeMainView: View {
         
         while Date().timeIntervalSince(startTime) < maxWaitTime {
             // Try to get the response using getLastResponse with strict Request ID matching
-            if let response = await browser.getLastResponse(forRequestId: requestId) {
+            if let response = await browser.getLastResponseText(forRequestId: requestId) {
                 // Check if this is a new response (not our prompt)
                 let cleanedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
                 

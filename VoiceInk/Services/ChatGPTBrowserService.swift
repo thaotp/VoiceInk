@@ -867,13 +867,47 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
         }
     }
     
-    /// Finalize the response after stream ends
+    /// Finalize the response after stream ends and UI stabilizes
     private func finalizeInterceptedResponse() {
         if !streamingText.isEmpty {
-            isStreaming = false
-            isBusy = false
-            streamingDelegate?.chatGPTDidFinishStreaming(finalText: streamingText)
-            print("[ChatGPTBrowser] Finalized response: \(streamingText.prefix(100))...")
+            // Wait for UI to report idle state (Live Region empty)
+            Task {
+                print("[ChatGPTBrowser] Network stream ended. Waiting for UI idle state...")
+                
+                // Poll for UI idle
+                var retries = 0
+                let maxRetries = 20 // 5 seconds (20 * 250ms)
+                
+                while retries < maxRetries {
+                    let isUIBusy = await isGeneratingResponse()
+                    if !isUIBusy {
+                        break
+                    }
+                    try? await Task.sleep(nanoseconds: 250_000_000) // 250ms
+                    retries += 1
+                }
+                
+                if retries >= maxRetries {
+                    print("[ChatGPTBrowser] Timed out waiting for UI idle. Finalizing anyway.")
+                } else {
+                    print("[ChatGPTBrowser] UI idle confirmed. Finalizing response.")
+                }
+                
+                // SCRAPE the final text from the DOM (Source of Truth)
+                // We do NOT trust the stream accumulator as it might be incomplete.
+                let finalScrapedText = await self.getLastResponseText(forRequestId: self.streamingRequestId)
+                
+                await MainActor.run {
+                    self.isStreaming = false
+                    self.isBusy = false
+                    
+                    let textToReturn = finalScrapedText ?? self.streamingText
+                    self.streamingDelegate?.chatGPTDidFinishStreaming(finalText: textToReturn)
+                    
+                    print("[ChatGPTBrowser] Finalized response. Method: \(finalScrapedText != nil ? "DOM Scrape" : "Stream Fallback")")
+                    print("[ChatGPTBrowser] Text Length: \(textToReturn.count)")
+                }
+            }
         }
     }
     
@@ -1552,12 +1586,28 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
             
             // Wait for UI to update, then submit
             return new Promise((resolve, reject) => {
+                const startTime = Date.now();
+                const TIMEOUT_MS = 10000; // 10 seconds max wait for Stop button
+
                 const checkButton = (attempts) => {
                     try {
-                        // Safety Check: If Stop button exists, we are definitely busy. Wait.
+                        // Safety Check 1: Stop button
                         const stopButton = document.querySelector('button[data-testid="stop-button"]');
-                        if (stopButton) {
-                            console.log('[ChatGPT-React] Stop button found, waiting for generation to finish...');
+                        
+                        // Safety Check 2: Live Region Text
+                        const liveRegion = document.getElementById('live-region-assertive');
+                        const liveText = liveRegion ? (liveRegion.textContent || '') : '';
+                        const isGeneratingLocally = liveText.includes('ChatGPT is generating');
+
+                        // If either indicator says we're busy, we wait.
+                        if (stopButton || isGeneratingLocally) {
+                            if (Date.now() - startTime > TIMEOUT_MS) {
+                                console.error('[ChatGPT-React] Timeout waiting for generation to finish');
+                                reject("Timeout: ChatGPT stuck in generating state (> 10s)");
+                                return;
+                            }
+
+                            console.log('[ChatGPT-React] Busy state detected (StopBtn: ' + !!stopButton + ', Text: ' + isGeneratingLocally + '), waiting...');
                             // Check again in 500ms
                             setTimeout(() => checkButton(attempts), 500); 
                             return;
@@ -1565,6 +1615,7 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
 
                         const sendButton = findSendButton();
                         
+                        // ... rest of logic ...
                         if (sendButton && !sendButton.disabled) {
                             console.log('[ChatGPT-React] Send button enabled, clicking');
                             
@@ -1640,12 +1691,15 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
     func isGeneratingResponse() async -> Bool {
         let javascript = """
         (function() {
-            // Look for stop button or loading indicators
-            const stopButton = document.querySelector('button[aria-label*="Stop"]');
-            const loadingIndicator = document.querySelector('[class*="loading"]');
-            const streamingText = document.querySelector('[class*="streaming"]');
+            // Look for stop button
+            const stopButton = document.querySelector('button[data-testid="stop-button"]');
             
-            return !!(stopButton || loadingIndicator || streamingText);
+            // Look for Live Region text
+            const liveRegion = document.getElementById('live-region-assertive');
+            const liveText = liveRegion ? (liveRegion.textContent || '').trim() : '';
+            
+            // Busy if Stop button exists OR Live Region has text (generating or 'Returned content')
+            return !!stopButton || liveText.length > 0;
         })();
         """
         
@@ -1659,100 +1713,40 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
     
     /// Get the last response from ChatGPT
     /// - Parameter requestId: Optional Request ID to enforce strict matching
-    func getLastResponse(forRequestId requestId: String? = nil) async -> String? {
-        // If Request ID is provided, enforce strict matching with streaming content
-        if let targetId = requestId {
-            if let currentId = streamingRequestId, currentId == targetId {
-                 // IDs match, return the streaming text
-                 return !streamingText.isEmpty ? streamingText : nil
-            } else if streamingRequestId == nil {
-                // Wait... no stream active yet
-                return nil
-            } else {
-                // Mismatch (streaming a different request)
-                return nil
-            }
-        }
-        
-        // Legacy/Fallback behavior: Prefer intercepted streaming text if available
-        if !streamingText.isEmpty {
-            return streamingText
-        }
-        
+    /// Get the last response from ChatGPT by scraping the DOM
+    /// - Parameter requestId: Optional Request ID to enforce strict matching
+    func getLastResponseText(forRequestId requestId: String? = nil) async -> String? {
         let javascript = """
         (function() {
-            // Helper to get text content efficiently
-            function getText(el) {
-                if (!el) return '';
-                // Prefer textContent to capture text even if element is hidden/fading in (opacity: 0)
-                return el.textContent || el.innerText || '';
-            }
+            // Find all assistant messages
+            const messages = document.querySelectorAll('[data-message-author-role="assistant"]');
+            if (!messages || messages.length === 0) return null;
             
-            console.log('[ChatGPT] Getting last response...');
+            // Get the last one
+            const lastMessage = messages[messages.length - 1];
             
-            // Try multiple selectors for assistant messages
-            const selectors = [
-                // New "result-thinking" class seen in recent UI
-                '.result-thinking',
-                
-                // Prioritize content-rich elements
-                '[data-message-author-role="assistant"] .markdown',
-                '[data-message-author-role="assistant"] .prose',
-                '[data-message-author-role="assistant"] p',
-                
-                // Message container fallback
-                '[data-message-author-role="assistant"]',
-                
-                // Alternative patterns
-                '[class*="agent-turn"] .markdown',
-                'div[data-message-id] .markdown'
-            ];
+            // Helper to get text from an element
+            const getText = (el) => {
+                 return el.textContent || '';
+            };
             
-            for (const selector of selectors) {
-                const messages = document.querySelectorAll(selector);
-                if (messages.length > 0) {
-                    // Get the last message
-                    const lastMessage = messages[messages.length - 1];
-                    let text = getText(lastMessage).trim();
-                    
-                    if (text.length > 0) {
-                        // Minimal filtering in JS - let Swift handle the logic
-                        if (/^(ChatGPT|You|User|Assistant):?$/i.test(text)) continue;
-                        
-                        console.log('[ChatGPT] Found response (' + text.length + ' chars)');
-                        return text;
-                    }
-                }
-            }
+            // Use the markdown container if possible for cleaner text
+            const markdownBody = lastMessage.querySelector('.markdown');
+            const text = markdownBody ? getText(markdownBody) : getText(lastMessage);
             
-            // Fallback: look for generic prose/response containers
-            const proseElements = document.querySelectorAll('.prose, .markdown');
-            if (proseElements.length > 0) {
-                const lastProse = proseElements[proseElements.length - 1];
-                let text = getText(lastProse).trim();
-                
-                // Ensure it's not the input prompt (simple heuristic)
-                if (text.length > 0 && !text.includes('Translate the following')) {
-                    return text;
-                }
-            }
-            
-            return null;
+            return text.trim();
         })();
         """
         
         do {
-            let result = try await webView.evaluateJavaScript(javascript)
-            if let text = result as? String, !text.isEmpty {
-                // print("[ChatGPTBrowser] Got response: \(text.prefix(50))...") // Reduce noise
-                return text
-            }
-            return nil
+            let result = try await webView.evaluateJavaScript(javascript) as? String
+            return result
         } catch {
-            print("[ChatGPTBrowser] Error getting response: \(error.localizedDescription)")
+            print("[ChatGPTBrowser] Error scraping last response: \(error)")
             return nil
         }
     }
+
 }
 
 // MARK: - WKNavigationDelegate
