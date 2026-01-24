@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 class OllamaService: ObservableObject {
-    static let defaultBaseURL = "http://localhost:11434"
+    static let defaultBaseURL = "http://127.0.0.1:11434"
     
     // MARK: - Response Types
     struct OllamaModel: Codable, Identifiable {

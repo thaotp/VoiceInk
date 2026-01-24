@@ -312,33 +312,12 @@ final class AppleSpeechRealtimeService: ObservableObject {
                     
                     // Emit finalized sentences
                     if let finalText = textToFinalize, !finalText.isEmpty {
-                        // Correct text using LLM if enabled in settings
-                        var textToEmit = finalText
-                        let lyricSettings = LyricModeSettings.shared
-                        let postProcessingEnabled = lyricSettings.postProcessingEnabled
-                        
-                        if #available(macOS 14.0, *), postProcessingEnabled {
-                             // Run correction asynchronously but wait for it to maintain order
-                             do {
-                                 textToEmit = try await LLMTextCorrector.shared.correctText(
-                                     finalText,
-                                     model: lyricSettings.postProcessingModel,
-                                     timeout: lyricSettings.postProcessingTimeout
-                                 )
-                             } catch {
-                                 // Fallback to original text on error or timeout
-                                 print("⚠️ [LLM Correction Failed]: \(error)")
-                             }
-                        }
-
                         await MainActor.run {
-                            self.transcript += textToEmit
-                            self.transcriptionPublisher.send(textToEmit)
+                            self.transcript += finalText
+                            self.transcriptionPublisher.send(finalText)
                             
-                            // Emit original text mapping for "Show original" feature
-                            if postProcessingEnabled {
-                                self.originalTranscriptionPublisher.send((corrected: textToEmit, original: finalText))
-                            }
+                            // Note: Post-processing is now handled by the View layer
+                            // to ensure translation runs on raw text independently.
                         }
                         shippedPrefixLength = text.count - remainderText.count
                     }

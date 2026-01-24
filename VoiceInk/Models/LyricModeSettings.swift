@@ -127,7 +127,7 @@ class LyricModeSettings: ObservableObject {
     // Post-Processing (LLM Correction) settings
     @AppStorage("lyricMode.postProcessingEnabled") var postProcessingEnabled: Bool = false
     @AppStorage("lyricMode.postProcessingModel") var postProcessingModel: String = "qwen2.5:3b"
-    @AppStorage("lyricMode.postProcessingTimeout") var postProcessingTimeout: Double = 2.0
+    @AppStorage("lyricMode.postProcessingTimeout") var postProcessingTimeout: Double = 30.0
     
     // Segment Processing settings
     @AppStorage("lyricMode.deduplicationEnabled") var deduplicationEnabled: Bool = true

@@ -939,6 +939,7 @@ struct LyricModeMainView: View {
                  if settings.retranslationEnabled {
                      translateSegment(at: lastIndex, text: trimmedText)
                  }
+                 postProcessSegment(at: lastIndex, rawText: trimmedText)
                  return
             }
             
@@ -950,6 +951,7 @@ struct LyricModeMainView: View {
                      if settings.retranslationEnabled {
                          translateSegment(at: lastIndex, text: trimmedText)
                      }
+                     postProcessSegment(at: lastIndex, rawText: trimmedText)
                  }
                  return
             }
@@ -976,6 +978,7 @@ struct LyricModeMainView: View {
                 if settings.retranslationEnabled {
                     translateSegment(at: lastIndex, text: trimmedText)
                 }
+                postProcessSegment(at: lastIndex, rawText: trimmedText)
                 return
             }
         }
@@ -990,6 +993,8 @@ struct LyricModeMainView: View {
                 if settings.retranslationEnabled {
                     translateSegment(at: lastIndex, text: complete)
                 }
+                postProcessSegment(at: lastIndex, rawText: complete)
+
                 // Prepend incomplete part to new segment
                 let newText = incomplete + trimmedText
                 transcriptSegments.append(newText)
@@ -998,7 +1003,9 @@ struct LyricModeMainView: View {
                 // Only translate the NEW partial segment if it's considered complete (or continuity is disabled)
                 // We check if it CONTAINS a complete sentence, even if it ends with incomplete
                 if !settings.sentenceContinuityEnabled || TranscriptTextProcessor.containsSentenceEnding(newText) {
-                    translateSegment(at: transcriptSegments.count - 1, text: newText)
+                    let newIndex = transcriptSegments.count - 1
+                    translateSegment(at: newIndex, text: newText)
+                    postProcessSegment(at: newIndex, rawText: newText)
                 }
                 return
             } else if !TranscriptTextProcessor.endsWithCompleteSentence(previousSegment) {
@@ -1018,6 +1025,7 @@ struct LyricModeMainView: View {
                     if settings.retranslationEnabled || !wasTranslated {
                         translateSegment(at: lastIndex, text: mergedText)
                     }
+                    postProcessSegment(at: lastIndex, rawText: mergedText)
                 }
                 return
             }
@@ -1035,6 +1043,7 @@ struct LyricModeMainView: View {
                         if settings.retranslationEnabled {
                             translateSegment(at: similarIndex, text: trimmedText)
                         }
+                        postProcessSegment(at: similarIndex, rawText: trimmedText)
                     }
                 }
                 return
@@ -1047,7 +1056,49 @@ struct LyricModeMainView: View {
         
         // Only translate if complete (when continuity is enabled)
         if !settings.sentenceContinuityEnabled || TranscriptTextProcessor.containsSentenceEnding(trimmedText) {
-            translateSegment(at: transcriptSegments.count - 1, text: trimmedText)
+            let index = transcriptSegments.count - 1
+            translateSegment(at: index, text: trimmedText)
+            postProcessSegment(at: index, rawText: trimmedText)
+        }
+    }
+
+    /// Post-process segment (LLM Correction) independently from translation
+    private func postProcessSegment(at index: Int, rawText: String) {
+        guard settings.postProcessingEnabled else { return }
+        
+        let model = settings.postProcessingModel
+        let timeout = settings.postProcessingTimeout
+        
+        // Clean raw text to ensure we don't double-correct or pass junk
+        // (Though strict "raw" is preferred, sometimes simple trim helps)
+        let input = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty else { return }
+        
+        Task {
+            if #available(macOS 14.0, *) {
+                do {
+                    // This runs in parallel with translation
+                    let corrected = try await LLMTextCorrector.shared.correctText(
+                        input,
+                        model: model,
+                        timeout: timeout
+                    )
+                    
+                    await MainActor.run {
+                        // Ensure index is still valid.
+                        if index < transcriptSegments.count {
+                             // We update the display text to the corrected version
+                             // Translation remains as-is (based on raw text)
+                             transcriptSegments[index] = corrected
+                             
+                             // Update original text mapping so "Show Original" works
+                             originalTextMap[corrected] = input
+                        }
+                    }
+                } catch {
+                    print("Post-processing error for segment \(index): \(error)")
+                }
+            }
         }
     }
     

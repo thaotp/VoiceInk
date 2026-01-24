@@ -98,19 +98,41 @@ extension LLMTextCorrector {
     
     /// Correct text with a timeout and optional model
     func correctText(_ input: String, model: String? = nil, timeout: TimeInterval) async throws -> String {
-        try await withThrowingTaskGroup(of: String.self) { group in
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            // Task 1: The actual correction
             group.addTask {
-                try await self.correctText(input, model: model)
+                return try await self.correctText(input, model: model)
             }
             
+            // Task 2: The timeout race
             group.addTask {
-                try await Task.sleep(for: .seconds(timeout))
+                // Sleep for timeout duration
+                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                // If we wake up, it means timeout happened
                 throw TextCorrectorError.timeout
             }
             
-            let result = try await group.next()!
-            group.cancelAll()
-            return result
+            // Wait for the first one to complete
+            do {
+                if let result = try await group.next() {
+                    group.cancelAll() // Cancel timeout task
+                    return result
+                } else {
+                    // Should not happen if tasks are added correctly
+                    throw TextCorrectorError.generationFailed("Unknown error (empty task group)")
+                }
+            } catch {
+                group.cancelAll() // Cancel other task
+                
+                // Enhance error logging
+                if let correctorError = error as? TextCorrectorError, case .timeout = correctorError {
+                    print("⏱️ [LLMTextCorrector] Operation timed out after \(timeout)s for input: '\(input.prefix(20))...'")
+                } else {
+                    print("⚠️ [LLMTextCorrector] Unexpected error: \(error.localizedDescription)")
+                }
+                
+                throw error
+            }
         }
     }
 }

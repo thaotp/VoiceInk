@@ -562,7 +562,7 @@ struct LyricModeSettingsView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .frame(width: 40)
-                    Slider(value: $settings.postProcessingTimeout, in: 0.5...5.0, step: 0.5)
+                    Slider(value: $settings.postProcessingTimeout, in: 0.5...60.0, step: 0.5)
                         .frame(width: 100)
                 }
             }
