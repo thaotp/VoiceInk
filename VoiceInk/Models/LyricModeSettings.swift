@@ -132,6 +132,7 @@ class LyricModeSettings: ObservableObject {
     // Segment Processing settings
     @AppStorage("lyricMode.deduplicationEnabled") var deduplicationEnabled: Bool = true
     @AppStorage("lyricMode.similarityReplacementEnabled") var similarityReplacementEnabled: Bool = true
+    @AppStorage("lyricMode.retranslationEnabled") var retranslationEnabled: Bool = true
     
     // Apple Speech specific settings
     @AppStorage("lyricMode.appleSpeechMode") var appleSpeechModeRaw: String = AppleSpeechMode.standard.rawValue

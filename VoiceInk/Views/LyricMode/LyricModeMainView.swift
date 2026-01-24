@@ -824,7 +824,9 @@ struct LyricModeMainView: View {
                              // It matches the last segment -> Update it if changed
                              if transcriptSegments[lastIndex] != text {
                                  transcriptSegments[lastIndex] = text
-                                 translateSegment(at: lastIndex, text: text)
+                                 if settings.retranslationEnabled {
+                                     translateSegment(at: lastIndex, text: text)
+                                 }
                              }
                              return
                          }
@@ -933,9 +935,11 @@ struct LyricModeMainView: View {
         if let lastSegment = transcriptSegments.last, let lastIndex = transcriptSegments.indices.last {
             // First check for simple cumulative update (exact prefix match)
             if TranscriptTextProcessor.isCumulativeUpdate(trimmedText, of: lastSegment) {
-                transcriptSegments[lastIndex] = trimmedText
-                translateSegment(at: lastIndex, text: trimmedText)
-                return
+                 transcriptSegments[lastIndex] = trimmedText
+                 if settings.retranslationEnabled {
+                     translateSegment(at: lastIndex, text: trimmedText)
+                 }
+                 return
             }
             
             // Then check for "fuzzy" replacement (normalized content match)
@@ -943,7 +947,9 @@ struct LyricModeMainView: View {
                  // It's a correction! Replace the last segment.
                  if transcriptSegments[lastIndex] != trimmedText {
                      transcriptSegments[lastIndex] = trimmedText
-                     translateSegment(at: lastIndex, text: trimmedText)
+                     if settings.retranslationEnabled {
+                         translateSegment(at: lastIndex, text: trimmedText)
+                     }
                  }
                  return
             }
@@ -967,7 +973,9 @@ struct LyricModeMainView: View {
                 let lastIndex = transcriptSegments.count - 1
                 transcriptSegments[lastIndex] = trimmedText
                 // Re-translate the updated segment
-                translateSegment(at: lastIndex, text: trimmedText)
+                if settings.retranslationEnabled {
+                    translateSegment(at: lastIndex, text: trimmedText)
+                }
                 return
             }
         }
@@ -979,18 +987,37 @@ struct LyricModeMainView: View {
             if let (complete, incomplete) = TranscriptTextProcessor.extractIncompleteSentence(from: previousSegment) {
                 // Update previous segment with complete part only
                 transcriptSegments[lastIndex] = complete
-                translateSegment(at: lastIndex, text: complete)
+                if settings.retranslationEnabled {
+                    translateSegment(at: lastIndex, text: complete)
+                }
                 // Prepend incomplete part to new segment
                 let newText = incomplete + trimmedText
                 transcriptSegments.append(newText)
                 syncTranslatedSegmentsCount()
-                translateSegment(at: transcriptSegments.count - 1, text: newText)
+                
+                // Only translate the NEW partial segment if it's considered complete (or continuity is disabled)
+                if !settings.sentenceContinuityEnabled || TranscriptTextProcessor.endsWithCompleteSentence(newText) {
+                    translateSegment(at: transcriptSegments.count - 1, text: newText)
+                }
                 return
             } else if !TranscriptTextProcessor.endsWithCompleteSentence(previousSegment) {
                 // Entire previous segment is incomplete - merge
                 let mergedText = previousSegment + trimmedText
                 transcriptSegments[lastIndex] = mergedText
-                translateSegment(at: lastIndex, text: mergedText)
+                
+                // Check if we should translate now
+                let isComplete = TranscriptTextProcessor.endsWithCompleteSentence(mergedText)
+                let wasTranslated = !translatedSegments[lastIndex].isEmpty
+                
+                // We translate if:
+                // 1. It is now complete (or continuity disabled)
+                // AND
+                // 2. (Retranslation is allowed OR It wasn't translated yet i.e. was deferred)
+                if !settings.sentenceContinuityEnabled || isComplete {
+                    if settings.retranslationEnabled || !wasTranslated {
+                        translateSegment(at: lastIndex, text: mergedText)
+                    }
+                }
                 return
             }
         }
@@ -1004,7 +1031,9 @@ struct LyricModeMainView: View {
                 if trimmedText.count >= transcriptSegments[similarIndex].count {
                     if transcriptSegments[similarIndex] != trimmedText {
                         transcriptSegments[similarIndex] = trimmedText
-                        translateSegment(at: similarIndex, text: trimmedText)
+                        if settings.retranslationEnabled {
+                            translateSegment(at: similarIndex, text: trimmedText)
+                        }
                     }
                 }
                 return
@@ -1014,7 +1043,11 @@ struct LyricModeMainView: View {
         // Normal case: append as new paragraph
         transcriptSegments.append(trimmedText)
         syncTranslatedSegmentsCount()
-        translateSegment(at: transcriptSegments.count - 1, text: trimmedText)
+        
+        // Only translate if complete (when continuity is enabled)
+        if !settings.sentenceContinuityEnabled || TranscriptTextProcessor.endsWithCompleteSentence(trimmedText) {
+            translateSegment(at: transcriptSegments.count - 1, text: trimmedText)
+        }
     }
     
     /// Find the index of the most similar existing segment above threshold
@@ -1296,6 +1329,7 @@ struct LyricModeSettingsPopup: View {
     // Segment Processing
     @State private var localDeduplicationEnabled: Bool = true
     @State private var localSimilarityReplacementEnabled: Bool = true
+    @State private var localRetranslationEnabled: Bool = true
     
     // AI Provider state
     @State private var localAIProvider: String = "ollama"
@@ -1398,7 +1432,9 @@ struct LyricModeSettingsPopup: View {
             
             // Segment Processing
             localDeduplicationEnabled = settings.deduplicationEnabled
+            localDeduplicationEnabled = settings.deduplicationEnabled
             localSimilarityReplacementEnabled = settings.similarityReplacementEnabled
+            localRetranslationEnabled = settings.retranslationEnabled
         }
     }
     
@@ -1429,7 +1465,9 @@ struct LyricModeSettingsPopup: View {
         localSpeakerDiarizationEnabled != settings.speakerDiarizationEnabled ||
         localDiarizationBackend != settings.diarizationBackend ||
         localDeduplicationEnabled != settings.deduplicationEnabled ||
-        localSimilarityReplacementEnabled != settings.similarityReplacementEnabled
+        localDeduplicationEnabled != settings.deduplicationEnabled ||
+        localSimilarityReplacementEnabled != settings.similarityReplacementEnabled ||
+        localRetranslationEnabled != settings.retranslationEnabled
     }
     
     private func applySettingsAndDismiss() {
@@ -1476,7 +1514,9 @@ struct LyricModeSettingsPopup: View {
         
         // Segment Processing settings
         settings.deduplicationEnabled = localDeduplicationEnabled
+        settings.deduplicationEnabled = localDeduplicationEnabled
         settings.similarityReplacementEnabled = localSimilarityReplacementEnabled
+        settings.retranslationEnabled = localRetranslationEnabled
         
         // Notify about changes that need recording restart
         onSettingsApplied?(audioDeviceChanged, engineChanged)
@@ -1998,6 +2038,11 @@ extension LyricModeSettingsPopup {
                 
             Toggle("Similarity Replacement", isOn: $localSimilarityReplacementEnabled)
             Text("Replaces an existing segment if a new one is >70% similar (treating it as a correction).")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                
+            Toggle("Re-Translation Triggered", isOn: $localRetranslationEnabled)
+            Text("If enabled, segments will be re-translated when their text is updated (e.g. by corrections).")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
