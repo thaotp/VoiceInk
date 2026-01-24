@@ -996,7 +996,8 @@ struct LyricModeMainView: View {
                 syncTranslatedSegmentsCount()
                 
                 // Only translate the NEW partial segment if it's considered complete (or continuity is disabled)
-                if !settings.sentenceContinuityEnabled || TranscriptTextProcessor.endsWithCompleteSentence(newText) {
+                // We check if it CONTAINS a complete sentence, even if it ends with incomplete
+                if !settings.sentenceContinuityEnabled || TranscriptTextProcessor.containsSentenceEnding(newText) {
                     translateSegment(at: transcriptSegments.count - 1, text: newText)
                 }
                 return
@@ -1006,14 +1007,14 @@ struct LyricModeMainView: View {
                 transcriptSegments[lastIndex] = mergedText
                 
                 // Check if we should translate now
-                let isComplete = TranscriptTextProcessor.endsWithCompleteSentence(mergedText)
+                let hasCompleteSentence = TranscriptTextProcessor.containsSentenceEnding(mergedText)
                 let wasTranslated = !translatedSegments[lastIndex].isEmpty
                 
                 // We translate if:
-                // 1. It is now complete (or continuity disabled)
+                // 1. It contains a complete sentence (or continuity disabled)
                 // AND
                 // 2. (Retranslation is allowed OR It wasn't translated yet i.e. was deferred)
-                if !settings.sentenceContinuityEnabled || isComplete {
+                if !settings.sentenceContinuityEnabled || hasCompleteSentence {
                     if settings.retranslationEnabled || !wasTranslated {
                         translateSegment(at: lastIndex, text: mergedText)
                     }
@@ -1045,7 +1046,7 @@ struct LyricModeMainView: View {
         syncTranslatedSegmentsCount()
         
         // Only translate if complete (when continuity is enabled)
-        if !settings.sentenceContinuityEnabled || TranscriptTextProcessor.endsWithCompleteSentence(trimmedText) {
+        if !settings.sentenceContinuityEnabled || TranscriptTextProcessor.containsSentenceEnding(trimmedText) {
             translateSegment(at: transcriptSegments.count - 1, text: trimmedText)
         }
     }
@@ -1149,7 +1150,9 @@ struct LyricModeMainView: View {
         // Build translation prompt with Content ID instruction
         let targetLanguage = settings.targetLanguage
         let prompt = """
-        Translate the following text to \(targetLanguage). Leverage the context from previous sentences and optimize it so that the Vietnamese reads as naturally as possible.
+        You are an expert Japanese translator. The text below is a raw transcript from Speech-to-Text (ASR), so it may contain typos, missing words, phonetic errors, or grammatical mistakes. 
+        Your task is to infer the original meaning based on context and phonetic similarity (guess the words that sound similar but make sense).
+        And translate the following text to \(targetLanguage). Leverage the context from previous sentences and optimize it so that the Vietnamese reads as naturally as possible.
         IMPORTANT: Start your response EXACTLY with "[ID:\(contentId)] " followed by the translation.
         
         Text:

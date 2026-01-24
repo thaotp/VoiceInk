@@ -100,6 +100,11 @@ enum TranscriptTextProcessor {
         return sentenceEndingPunctuation.contains(lastChar)
     }
     
+    /// Check if text contains any sentence ending punctuation
+    static func containsSentenceEnding(_ text: String) -> Bool {
+        return text.contains { sentenceEndingPunctuation.contains($0) }
+    }
+    
     /// Extract the incomplete sentence portion from the end of text
     /// - Returns: Tuple of (complete part, incomplete part) or nil if text ends with complete sentence
     static func extractIncompleteSentence(from text: String) -> (complete: String, incomplete: String)? {
