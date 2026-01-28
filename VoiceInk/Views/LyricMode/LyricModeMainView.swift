@@ -16,7 +16,7 @@ struct LyricModeMainView: View {
     @State private var toastIcon = ""
     @State private var toastColor: Color = .green
     @State private var translatedText: String = ""
-    @State private var cancellables = Set<AnyCancellable>()
+    // REMOVED: @State private var cancellables - using .onReceive() instead for proper SwiftUI subscription lifecycle
     @State private var isPaused = false
 
     @State private var shouldAutoScroll = true
@@ -152,6 +152,19 @@ struct LyricModeMainView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .lyricModeClearAndReset)) { _ in
             clearAndReset()
+        }
+        // MARK: - Transcription Subscriptions (using .onReceive for proper SwiftUI lifecycle)
+        .onReceive(lyricModeManager.transcriptionPublisher) { text in
+            handleTranscriptionReceived(text)
+        }
+        .onReceive(lyricModeManager.partialTranscriptionPublisher) { text in
+            handlePartialTranscription(text)
+        }
+        .onReceive(lyricModeManager.$transcriptSegments.removeDuplicates()) { segments in
+            handleTranscriptSegmentsUpdate(segments)
+        }
+        .onReceive(lyricModeManager.originalTranscriptionPublisher) { mapping in
+            originalTextMap[mapping.corrected] = mapping.original
         }
         .sheet(isPresented: $showingWindowSelection) {
             WindowSelectionSheet(
@@ -655,13 +668,23 @@ struct LyricModeMainView: View {
         do {
             isPaused = false
             
+            // Clear session-related state for fresh start
+            liveTranslationCreatedSegments.removeAll()
+            pendingTranslations.removeAll()
+            showingOriginal.removeAll()
+            ignoredSegments.removeAll()
+            
+            // Clear translation history for new session context
+            translationService.clearHistory()
+            
             // If using ChatGPT for translation, start a new chat session
             if settings.translationEnabled && settings.translationProvider == .chatGPT {
                 await ChatGPTBrowserService.shared.startNewChatSession()
             }
             
             try await lyricModeManager.startRecording(with: whisperState)
-            subscribeToTranscription()
+            // Note: Subscriptions are now handled via .onReceive() in the view body
+            print("[MainView] startRecordingAfterWindowSelection - recording started")
             
             // Show or hide overlay based on auto-show setting
             if settings.autoShowOverlay {
@@ -806,75 +829,54 @@ struct LyricModeMainView: View {
         }
         NSApplication.shared.keyWindow?.close()
     }
+        // MARK: - Transcription Handlers (for .onReceive modifiers)
     
-
+    /// Handle transcription received from the manager
+    private func handleTranscriptionReceived(_ text: String) {
+        print("[MainView] handleTranscriptionReceived: '\(text.prefix(50))...' (segments: \(transcriptSegments.count))")
+        
+        // Skip if this segment was already created by Live Translation mode
+        // Only skip if it matches the LAST segment (correction/update)
+        if settings.translateImmediately && liveTranslationCreatedSegments.contains(text) {
+            if let lastIndex = transcriptSegments.indices.last {
+                // Check similarity with last segment
+                if TranscriptTextProcessor.similarityRatio(transcriptSegments[lastIndex], text) > 0.7 {
+                    // It matches the last segment -> Update it if changed
+                    if transcriptSegments[lastIndex] != text {
+                        transcriptSegments[lastIndex] = text
+                        if settings.retranslationEnabled {
+                            translateSegment(at: lastIndex, text: text)
+                        }
+                    }
+                    return
+                }
+            }
+            // If we are here, it doesn't match the last segment. 
+            // It might be a repeated phrase. Fall through to processNewTranscriptSegment.
+        }
+        processNewTranscriptSegment(text)
+    }
     
-    private func subscribeToTranscription() {
-        // Subscribe to transcription updates from the manager
-        lyricModeManager.transcriptionPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [self] text in
-                // Skip if this segment was already created by Live Translation mode
-                // Only skip if it matches the LAST segment (correction/update)
-                // If it creates a new duplicate of an OLD segment, we treat it as new.
-                if settings.translateImmediately && liveTranslationCreatedSegments.contains(text) {
-                     if let lastIndex = transcriptSegments.indices.last {
-                         // Check similarity with last segment
-                         if TranscriptTextProcessor.similarityRatio(transcriptSegments[lastIndex], text) > 0.7 {
-                             // It matches the last segment -> Update it if changed
-                             if transcriptSegments[lastIndex] != text {
-                                 transcriptSegments[lastIndex] = text
-                                 if settings.retranslationEnabled {
-                                     translateSegment(at: lastIndex, text: text)
-                                 }
-                             }
-                             return
-                         }
-                     } else {
-                         // No segments yet, but it's in created set? Treat as new.
-                     }
-                     // If we are here, it doesn't match the last segment. 
-                     // It might be a repeated phrase. Fall through to processNewTranscriptSegment.
-                }
-                processNewTranscriptSegment(text)
-            }
-            .store(in: &cancellables)
+    /// Handle partial transcription for live translation
+    private func handlePartialTranscription(_ text: String) {
+        if settings.translateImmediately {
+            processLiveTranslation(from: text)
+        }
         
-        lyricModeManager.partialTranscriptionPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [self] text in
-                if settings.translateImmediately {
-                   processLiveTranslation(from: text)
-                }
-                
-                // Update partial text display, filtering out already confirmed segments
-                let allConfirmed = transcriptSegments.joined(separator: " ")
-                if let uniquePartial = TranscriptTextProcessor.removeOverlap(from: text, existingText: allConfirmed) {
-                    partialText = uniquePartial
-                } else {
-                    partialText = "" // Fully overlapped/confirmed
-                }
-            }
-            .store(in: &cancellables)
-        
-        // Subscribe to transcript segments for display
-        lyricModeManager.$transcriptSegments
-            .receive(on: DispatchQueue.main)
-            .removeDuplicates() // Prevent cascade updates for same content
-            .sink { [self] segments in
-                // Sync local transcriptSegments with manager
-                transcriptSegments = segments
-                syncTranslatedSegmentsCount()
-            }
-            .store(in: &cancellables)
-        
-        // Subscribe to original (pre-correction) text mapping for "Show original" feature
-        lyricModeManager.originalTranscriptionPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [self] mapping in
-                originalTextMap[mapping.corrected] = mapping.original
-            }
-            .store(in: &cancellables)
+        // Update partial text display, filtering out already confirmed segments
+        let allConfirmed = transcriptSegments.joined(separator: " ")
+        if let uniquePartial = TranscriptTextProcessor.removeOverlap(from: text, existingText: allConfirmed) {
+            partialText = uniquePartial
+        } else {
+            partialText = "" // Fully overlapped/confirmed
+        }
+    }
+    
+    /// Handle transcript segments update from manager
+    private func handleTranscriptSegmentsUpdate(_ segments: [String]) {
+        // Note: transcriptSegments is a computed property that already points to lyricModeManager.transcriptSegments
+        // We only need to sync the translated segments count when the source changes
+        syncTranslatedSegmentsCount()
     }
     
     private func processLiveTranslation(from text: String) {
@@ -926,8 +928,13 @@ struct LyricModeMainView: View {
     
     /// Process a new transcript segment with overlap detection and sentence continuity
     private func processNewTranscriptSegment(_ text: String) {
+        print("[MainView] processNewTranscriptSegment: '\(text.prefix(50))...'")
+        
         var trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedText.isEmpty else { return }
+        guard !trimmedText.isEmpty else {
+            print("[MainView] -> SKIPPED: empty after trim")
+            return
+        }
         
         // 1. Check if this is a replacement/correction of the LAST segment
         // This handles the case where "Live Translate" added a tentative segment (e.g. "Hello world")
@@ -935,6 +942,7 @@ struct LyricModeMainView: View {
         if let lastSegment = transcriptSegments.last, let lastIndex = transcriptSegments.indices.last {
             // First check for simple cumulative update (exact prefix match)
             if TranscriptTextProcessor.isCumulativeUpdate(trimmedText, of: lastSegment) {
+                 print("[MainView] -> isCumulativeUpdate=true, updating segment \(lastIndex)")
                  transcriptSegments[lastIndex] = trimmedText
                  if settings.retranslationEnabled {
                      translateSegment(at: lastIndex, text: trimmedText)
@@ -945,6 +953,7 @@ struct LyricModeMainView: View {
             
             // Then check for "fuzzy" replacement (normalized content match)
             if TranscriptTextProcessor.isReplacementOf(trimmedText, existingText: lastSegment) {
+                 print("[MainView] -> isReplacementOf=true, replacing segment \(lastIndex)")
                  // It's a correction! Replace the last segment.
                  if transcriptSegments[lastIndex] != trimmedText {
                      transcriptSegments[lastIndex] = trimmedText
@@ -959,26 +968,18 @@ struct LyricModeMainView: View {
     
         // 2. Remove overlap with existing content (standard flow)
         let existingText = transcriptSegments.joined(separator: " ")
+        print("[MainView] -> existingText length: \(existingText.count), checking overlap...")
         if let processedText = TranscriptTextProcessor.removeOverlap(from: trimmedText, existingText: existingText) {
+            print("[MainView] -> After overlap removal: '\(processedText.prefix(50))...'")
             trimmedText = processedText
         } else {
+            print("[MainView] -> SKIPPED: removeOverlap returned nil (all content exists)")
             return // All content already exists
         }
         
         // Check for duplicates with last segment
         if settings.deduplicationEnabled, let lastSegment = transcriptSegments.last {
             if TranscriptTextProcessor.isDuplicate(trimmedText, of: lastSegment) {
-                return
-            }
-            // Handle cumulative update (new text extends last segment)
-            if TranscriptTextProcessor.isCumulativeUpdate(trimmedText, of: lastSegment) {
-                let lastIndex = transcriptSegments.count - 1
-                transcriptSegments[lastIndex] = trimmedText
-                // Re-translate the updated segment
-                if settings.retranslationEnabled {
-                    translateSegment(at: lastIndex, text: trimmedText)
-                }
-                postProcessSegment(at: lastIndex, rawText: trimmedText)
                 return
             }
         }

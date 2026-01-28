@@ -61,10 +61,11 @@ enum TranscriptTextProcessor {
         if existingText.hasPrefix(newText) {
             return true
         }
-        // Substantial overlap
-        if existingText.contains(newText) || newText.contains(existingText) {
+        // Existing text completely contains new text (new text is a subset/substring of what we already have)
+        if existingText.contains(newText) {
             return true
         }
+        
         return false
     }
     

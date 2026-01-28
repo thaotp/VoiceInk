@@ -228,15 +228,22 @@ final class LyricModeWindowManager: ObservableObject {
     private func subscribeToAppleSpeechTranscription(service: AppleSpeechRealtimeService) {
         var publishedForTranslation: Set<String> = [] // Cache to prevent duplicate translation
         
+        print("[WindowManager] subscribeToAppleSpeechTranscription() called")
+        
         service.transcriptionPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] text in
                 guard let self = self else { return }
                 
+                print("[WindowManager] Received from AppleSpeech: '\(text.prefix(50))...'")
+                
                 // Only publish if not already sent for translation
                 if !publishedForTranslation.contains(text) {
                     publishedForTranslation.insert(text)
+                    print("[WindowManager] -> Publishing to transcriptionPublisher")
                     self.transcriptionPublisher.send(text)
+                } else {
+                    print("[WindowManager] -> SKIPPED: already in publishedForTranslation cache")
                 }
             }
             .store(in: &cancellables)
@@ -371,6 +378,13 @@ final class LyricModeWindowManager: ObservableObject {
     
     func clear() {
         appleSpeechService?.clear()
+        
+        // Explicitly clear all data to ensure fresh state for next session
+        transcriptSegments = []
+        translatedSegments = []
+        originalTextMap = [:]
+        partialText = ""
+        recordingDuration = 0
         
         // Destroy old overlay so a fresh one is created on next show
         deinitializeWindow()
