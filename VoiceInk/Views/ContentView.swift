@@ -61,7 +61,8 @@ struct ContentView: View {
     @EnvironmentObject private var whisperState: WhisperState
     @EnvironmentObject private var hotkeyManager: HotkeyManager
     @AppStorage("powerModeUIFlag") private var powerModeUIFlag = false
-    @State private var selectedView: ViewType? = .metrics
+    @State private var selectedView: ViewType? = .lyricMode
+    @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
     let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     @StateObject private var licenseViewModel = LicenseViewModel()
     @StateObject private var lyricModeManager = LyricModeWindowManager()
@@ -76,7 +77,7 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             List(selection: $selectedView) {
                 Section {
                     // App Header
