@@ -1,7 +1,7 @@
 import Foundation
  
  enum PredefinedModels {
-    static func getLanguageDictionary(isMultilingual: Bool, provider: ModelProvider = .local) -> [String: String] {
+    static func getLanguageDictionary(isMultilingual: Bool, provider: ModelProvider = .parakeet) -> [String: String] {
         if !isMultilingual {
             return ["en": "English"]
         } else {
@@ -112,89 +112,7 @@ import Foundation
             supportedLanguages: getLanguageDictionary(isMultilingual: true, provider: .parakeet)
         ),
         
-         // Local Models
-         LocalModel(
-             name: "ggml-tiny",
-             displayName: "Tiny",
-             size: "75 MB",
-             supportedLanguages: getLanguageDictionary(isMultilingual: true, provider: .local),
-             description: "Tiny model, fastest, least accurate",
-             speed: 0.95,
-             accuracy: 0.6,
-             ramUsage: 0.3
-         ),
-         LocalModel(
-             name: "ggml-tiny.en",
-             displayName: "Tiny (English)",
-             size: "75 MB",
-             supportedLanguages: getLanguageDictionary(isMultilingual: false, provider: .local),
-             description: "Tiny model optimized for English, fastest, least accurate",
-             speed: 0.95,
-             accuracy: 0.65,
-             ramUsage: 0.3
-         ),
-         LocalModel(
-             name: "ggml-base",
-             displayName: "Base",
-             size: "142 MB",
-             supportedLanguages: getLanguageDictionary(isMultilingual: true, provider: .local),
-             description: "Base model, good balance between speed and accuracy, supports multiple languages",
-             speed: 0.85,
-             accuracy: 0.72,
-             ramUsage: 0.5
-         ),
-         LocalModel(
-             name: "ggml-base.en",
-             displayName: "Base (English)",
-             size: "142 MB",
-             supportedLanguages: getLanguageDictionary(isMultilingual: false, provider: .local),
-             description: "Base model optimized for English, good balance between speed and accuracy",
-             speed: 0.85,
-             accuracy: 0.75,
-             ramUsage: 0.5
-         ),
-         LocalModel(
-             name: "ggml-large-v2",
-             displayName: "Large v2",
-             size: "2.9 GB",
-             supportedLanguages: getLanguageDictionary(isMultilingual: true, provider: .local),
-             description: "Large model v2, slower than Medium but more accurate",
-             speed: 0.3,
-             accuracy: 0.96,
-             ramUsage: 3.8
-         ),
-         LocalModel(
-             name: "ggml-large-v3",
-             displayName: "Large v3",
-             size: "2.9 GB",
-             supportedLanguages: getLanguageDictionary(isMultilingual: true, provider: .local),
-             description: "Large model v3, very slow but most accurate",
-             speed: 0.3,
-             accuracy: 0.98,
-             ramUsage: 3.9
-         ),
-         LocalModel(
-             name: "ggml-large-v3-turbo",
-             displayName: "Large v3 Turbo",
-             size: "1.5 GB",
-             supportedLanguages: getLanguageDictionary(isMultilingual: true, provider: .local),
-             description:
-             "Large model v3 Turbo, faster than v3 with similar accuracy",
-             speed: 0.75,
-             accuracy: 0.97,
-             ramUsage: 1.8
-         ),
-         LocalModel(
-             name: "ggml-large-v3-turbo-q5_0",
-             displayName: "Large v3 Turbo (Quantized)",
-             size: "547 MB",
-             supportedLanguages: getLanguageDictionary(isMultilingual: true, provider: .local),
-             description: "Quantized version of Large v3 Turbo, faster with slightly lower accuracy",
-             speed: 0.75,
-             accuracy: 0.95,
-             ramUsage: 1.0
-         ),
-         
+
                  // Cloud Models
         CloudModel(
             name: "whisper-large-v3-turbo",

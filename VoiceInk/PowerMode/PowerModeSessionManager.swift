@@ -181,15 +181,6 @@ class PowerModeSessionManager {
         await whisperState.setDefaultTranscriptionModel(newModel)
 
         switch newModel.provider {
-        case .local:
-            await whisperState.cleanupModelResources()
-            if let localModel = await whisperState.availableModels.first(where: { $0.name == newModel.name }) {
-                do {
-                    try await whisperState.loadModel(localModel)
-                } catch {
-                    print("Power Mode: Failed to load local model '\(localModel.name)': \(error)")
-                }
-            }
         case .parakeet:
             await whisperState.cleanupModelResources()
 

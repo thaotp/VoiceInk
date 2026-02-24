@@ -4,8 +4,6 @@ extension WhisperState {
     var usableModels: [any TranscriptionModel] {
         allAvailableModels.filter { model in
             switch model.provider {
-            case .local:
-                return availableModels.contains { $0.name == model.name }
             case .parakeet:
                 return isParakeetModelDownloaded(named: model.name)
             case .nativeApple:
@@ -33,14 +31,8 @@ extension WhisperState {
         }
     }
     
-    /// Get the file path for a local whisper model
+    /// Legacy local-model path lookup. Local whisper.cpp models are no longer supported.
     func getModelPath(for model: any TranscriptionModel) -> String? {
-        guard model.provider == .local else { return nil }
-        
-        // Find the WhisperModel in availableModels
-        if let whisperModel = availableModels.first(where: { $0.name == model.name }) {
-            return whisperModel.url.path
-        }
         return nil
     }
 } 

@@ -18,29 +18,7 @@ struct ModelCardRowView: View {
     var body: some View {
         Group {
             switch model.provider {
-            case .local:
-                if let localModel = model as? LocalModel {
-                    LocalModelCardView(
-                        model: localModel,
-                        isDownloaded: isDownloaded,
-                        isCurrent: isCurrent,
-                        downloadProgress: downloadProgress,
-                        modelURL: modelURL,
-                        isWarming: isWarming,
-                        deleteAction: deleteAction,
-                        setDefaultAction: setDefaultAction,
-                        downloadAction: downloadAction
-                    )
-                } else if let importedModel = model as? ImportedLocalModel {
-                    ImportedLocalModelCardView(
-                        model: importedModel,
-                        isDownloaded: isDownloaded,
-                        isCurrent: isCurrent,
-                        modelURL: modelURL,
-                        deleteAction: deleteAction,
-                        setDefaultAction: setDefaultAction
-                    )
-                }
+
                     case .parakeet:
             if let parakeetModel = model as? ParakeetModel {
                 ParakeetModelCardRowView(

@@ -38,11 +38,16 @@ final class WhisperModelWarmupCoordinator: ObservableObject {
     
     private func runWarmup(for model: LocalModel, whisperState: WhisperState) async throws {
         guard let sampleURL = warmupSampleURL() else { return }
-        let service = LocalTranscriptionService(
-            modelsDirectory: whisperState.modelsDirectory,
-            whisperState: whisperState
+        guard let selectedModel = whisperState.allAvailableModels.first(where: { $0.name == model.name }) else {
+            return
+        }
+
+        // Warmup now uses the unified transcription registry because local whisper.cpp is removed.
+        let registry = TranscriptionServiceRegistry(
+            whisperState: whisperState,
+            modelsDirectory: whisperState.modelsDirectory
         )
-        _ = try await service.transcribe(audioURL: sampleURL, model: model)
+        _ = try await registry.transcribe(audioURL: sampleURL, model: selectedModel)
     }
     
     private func warmupSampleURL() -> URL? {

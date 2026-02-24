@@ -39,6 +39,10 @@ struct LyricModeMainView: View {
     // Track in-flight translation requests to avoid duplicates (index -> text)
     @State private var pendingTranslations: [Int: String] = [:]
     
+    // Track ChatGPT translations awaiting recovery when app regains focus
+    // Key: segment index, Value: (sourceText, requestId, contentId)
+    @State private var awaitingRecovery: [Int: (text: String, requestId: String?, contentId: String)] = [:]
+    
     // Track which segments are showing original (pre-correction) text
     @State private var showingOriginal: Set<Int> = []
 
@@ -165,6 +169,9 @@ struct LyricModeMainView: View {
         }
         .onReceive(lyricModeManager.originalTranscriptionPublisher) { mapping in
             originalTextMap[mapping.corrected] = mapping.original
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            recoverMissedTranslations()
         }
         .sheet(isPresented: $showingWindowSelection) {
             WindowSelectionSheet(
@@ -679,6 +686,7 @@ struct LyricModeMainView: View {
             
             // If using ChatGPT for translation, start a new chat session
             if settings.translationEnabled && settings.translationProvider == .chatGPT {
+                ChatGPTBrowserService.shared.prepare()
                 await ChatGPTBrowserService.shared.startNewChatSession()
             }
             
@@ -1165,7 +1173,7 @@ struct LyricModeMainView: View {
                     
                     // Check which provider to use
                     if self.settings.translationProvider == .chatGPT {
-                        translation = try await self.translateWithChatGPT(text)
+                        translation = try await self.translateWithChatGPT(text, forSegmentIndex: index)
                     } else {
                         translation = try await self.translationService.translate(text)
                     }
@@ -1183,8 +1191,12 @@ struct LyricModeMainView: View {
     }
     
     /// Translate text using ChatGPT browser service
-    private func translateWithChatGPT(_ text: String) async throws -> String {
+    /// - Parameters:
+    ///   - text: The text to translate
+    ///   - index: The segment index for recovery tracking
+    private func translateWithChatGPT(_ text: String, forSegmentIndex index: Int) async throws -> String {
         let browser = ChatGPTBrowserService.shared
+        browser.prepare()
         
         // Check if logged in
         guard browser.isLoggedIn else {
@@ -1197,7 +1209,7 @@ struct LyricModeMainView: View {
         }
         
         // Generate unique Content ID for this specific translation
-        let contentId = UUID().uuidString.prefix(8) // Short ID is enough
+        let contentId = String(UUID().uuidString.prefix(8)) // Short ID is enough
         
         // Build translation prompt with Content ID instruction
         let targetLanguage = settings.targetLanguage
@@ -1217,6 +1229,12 @@ struct LyricModeMainView: View {
         guard case .success = sendResult else {
             print("[ChatGPT Translation] Failed to send message: \(sendResult)")
             throw TranslationError.invalidResponse
+        }
+        
+        // Track this translation for recovery in case app loses focus
+        await MainActor.run {
+            awaitingRecovery[index] = (text: text, requestId: requestId, contentId: contentId)
+            print("[Recovery] Tracking segment \(index) for potential recovery (contentId: \(contentId))")
         }
         
         // Wait for ChatGPT to start generating response
@@ -1278,7 +1296,14 @@ struct LyricModeMainView: View {
         
         guard !translation.isEmpty else {
             print("[ChatGPT Translation] No verified response captured after timeout")
+            // Keep awaitingRecovery entry for later recovery when app regains focus
             throw TranslationError.invalidResponse
+        }
+        
+        // Success! Remove from recovery tracking
+        await MainActor.run {
+            awaitingRecovery.removeValue(forKey: index)
+            print("[Recovery] Segment \(index) translated successfully, removed from recovery tracking")
         }
         
         // Clean up the translation (remove any trailing markers we added)
@@ -1317,7 +1342,7 @@ struct LyricModeMainView: View {
                 
                 // Check which provider to use
                 if settings.translationProvider == .chatGPT {
-                    translation = try await translateWithChatGPT(text)
+                    translation = try await translateWithChatGPT(text, forSegmentIndex: index)
                 } else {
                     translation = try await translationService.translate(text)
                 }
@@ -1348,6 +1373,71 @@ struct LyricModeMainView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             if toastMessage == message {
                 showToast = false
+            }
+        }
+    }
+    
+    // MARK: - Focus Recovery
+    
+    /// Recover missed ChatGPT translations when app regains focus
+    /// This handles the case where translations were sent while the app was in background
+    /// and JavaScript DOM scraping failed, but the responses exist in the ChatGPT page.
+    private func recoverMissedTranslations() {
+        // Only run recovery if:
+        // - Translation is enabled
+        // - Provider is ChatGPT
+        // - There are entries awaiting recovery
+        guard settings.translationEnabled else { return }
+        guard settings.translationProvider == .chatGPT else { return }
+        guard !awaitingRecovery.isEmpty else { return }
+        
+        print("[Recovery] App became active, checking \(awaitingRecovery.count) segments for recovery")
+        
+        let browser = ChatGPTBrowserService.shared
+        browser.prepare()
+        
+        // Create a snapshot of entries to recover
+        let entriesToRecover = awaitingRecovery
+        
+        for (index, info) in entriesToRecover {
+            // Skip if translation already exists
+            if index < translatedSegments.count && !translatedSegments[index].isEmpty {
+                awaitingRecovery.removeValue(forKey: index)
+                print("[Recovery] Segment \(index) already has translation, skipping")
+                continue
+            }
+            
+            // Try to recover this translation
+            Task {
+                do {
+                    // Now that we have focus, try to get the response from ChatGPT
+                    if let response = await browser.getLastResponseText(forRequestId: info.requestId) {
+                        let cleanedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let expectedTag = "[ID:\(info.contentId)]"
+                        
+                        if let range = cleanedResponse.range(of: expectedTag) {
+                            let content = String(cleanedResponse[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                            
+                            if !content.isEmpty {
+                                // Clean up the translation
+                                var cleanedTranslation = content
+                                if let refRange = cleanedTranslation.range(of: "\n\n[Ref:", options: .backwards) {
+                                    cleanedTranslation = String(cleanedTranslation[..<refRange.lowerBound])
+                                }
+                                
+                                await MainActor.run {
+                                    if index < translatedSegments.count {
+                                        translatedSegments[index] = cleanedTranslation.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        awaitingRecovery.removeValue(forKey: index)
+                                        print("[Recovery] Successfully recovered translation for segment \(index)")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch {
+                    print("[Recovery] Error recovering segment \(index): \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -1663,15 +1753,10 @@ struct LyricModeSettingsPopup: View {
                     Text("Auto Detect").tag("auto")
                     // Support both short codes and full locale codes
                     Text("English").tag("en")
-                    Text("English").tag("en-US")
                     Text("Japanese").tag("ja")
-                    Text("Japanese").tag("ja-JP")
                     Text("Chinese").tag("zh")
-                    Text("Chinese").tag("zh-CN")
                     Text("Korean").tag("ko")
-                    Text("Korean").tag("ko-KR")
                     Text("Vietnamese").tag("vi")
-                    Text("Vietnamese").tag("vi-VN")
                 }
                 .labelsHidden()
             }
@@ -2226,6 +2311,7 @@ extension LyricModeSettingsPopup {
                             Spacer()
                             
                             Button(ChatGPTBrowserService.shared.isVisible ? "Hide Browser" : "Login to ChatGPT") {
+                                ChatGPTBrowserService.shared.prepare()
                                 ChatGPTBrowserService.shared.toggleVisibility(show: !ChatGPTBrowserService.shared.isVisible)
                             }
                             .buttonStyle(.bordered)

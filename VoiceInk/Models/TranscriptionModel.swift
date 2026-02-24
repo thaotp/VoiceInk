@@ -2,7 +2,7 @@ import Foundation
 
 // Enum to differentiate between model providers
 enum ModelProvider: String, Codable, Hashable, CaseIterable {
-    case local = "Local"
+
     case parakeet = "Parakeet"
     case groq = "Groq"
     case elevenLabs = "ElevenLabs"
@@ -153,47 +153,3 @@ struct CustomCloudModel: TranscriptionModel, Codable {
         try container.encode(supportedLanguages, forKey: .supportedLanguages)
     }
 } 
-
-struct LocalModel: TranscriptionModel {
-    let id = UUID()
-    let name: String
-    let displayName: String
-    let size: String
-    let supportedLanguages: [String: String]
-    let description: String
-    let speed: Double
-    let accuracy: Double
-    let ramUsage: Double
-    let provider: ModelProvider = .local
-
-    var downloadURL: String {
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/\(filename)"
-    }
-
-    var filename: String {
-        "\(name).bin"
-    }
-
-    var isMultilingualModel: Bool {
-        supportedLanguages.count > 1
-    }
-} 
-
-// User-imported local models 
-struct ImportedLocalModel: TranscriptionModel {
-    let id = UUID()
-    let name: String
-    let displayName: String
-    let description: String
-    let provider: ModelProvider = .local
-    let isMultilingualModel: Bool
-    let supportedLanguages: [String: String]
-
-    init(fileBaseName: String) {
-        self.name = fileBaseName
-        self.displayName = fileBaseName
-        self.description = "Imported local model"
-        self.isMultilingualModel = true
-        self.supportedLanguages = PredefinedModels.getLanguageDictionary(isMultilingual: true, provider: .local)
-    }
-}

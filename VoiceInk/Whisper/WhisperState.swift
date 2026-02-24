@@ -19,11 +19,10 @@ enum RecordingState: Equatable {
 class WhisperState: NSObject, ObservableObject {
     @Published var recordingState: RecordingState = .idle
     @Published var isModelLoaded = false
-    @Published var loadedLocalModel: WhisperModel?
     @Published var currentTranscriptionModel: (any TranscriptionModel)?
     @Published var isModelLoading = false
-    @Published var availableModels: [WhisperModel] = []
     @Published var allAvailableModels: [any TranscriptionModel] = PredefinedModels.models
+    @Published var availableModels: [LocalModel] = []
     @Published var clipboardMessage = ""
     @Published var miniRecorderError: String?
     @Published var shouldCancelRecording = false
@@ -58,7 +57,7 @@ class WhisperState: NSObject, ObservableObject {
         }
     }
     
-    var whisperContext: WhisperContext?
+
     let recorder = Recorder()
     var recordedFile: URL? = nil
     let whisperPrompt = WhisperPrompt()
@@ -70,20 +69,7 @@ class WhisperState: NSObject, ObservableObject {
     
     internal var serviceRegistry: TranscriptionServiceRegistry!
     
-    private var modelUrl: URL? {
-        let possibleURLs = [
-            Bundle.main.url(forResource: "ggml-base.en", withExtension: "bin", subdirectory: "Models"),
-            Bundle.main.url(forResource: "ggml-base.en", withExtension: "bin"),
-            Bundle.main.bundleURL.appendingPathComponent("Models/ggml-base.en.bin")
-        ]
-        
-        for url in possibleURLs {
-            if let url = url, FileManager.default.fileExists(atPath: url.path) {
-                return url
-            }
-        }
-        return nil
-    }
+
     
     private enum LoadError: Error {
         case couldNotLocateModel
@@ -96,6 +82,7 @@ class WhisperState: NSObject, ObservableObject {
     let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "WhisperState")
     var notchWindowManager: NotchWindowManager?
     var miniWindowManager: MiniWindowManager?
+    var whisperContext: WhisperContext?
     
     // For model progress tracking
     @Published var downloadProgress: [String: Double] = [:]
@@ -123,9 +110,8 @@ class WhisperState: NSObject, ObservableObject {
         self.serviceRegistry = TranscriptionServiceRegistry(whisperState: self, modelsDirectory: self.modelsDirectory)
         
         setupNotifications()
-        createModelsDirectoryIfNeeded()
+        setupNotifications()
         createRecordingsDirectoryIfNeeded()
-        loadAvailableModels()
         loadCurrentTranscriptionModel()
         refreshAllAvailableModels()
     }
@@ -203,16 +189,7 @@ class WhisperState: NSObject, ObservableObject {
                                 guard let self = self else { return }
 
                                 // Only load model if it's a local model and not already loaded
-                                if let model = await self.currentTranscriptionModel, model.provider == .local {
-                                    if let localWhisperModel = await self.availableModels.first(where: { $0.name == model.name }),
-                                       await self.whisperContext == nil {
-                                        do {
-                                            try await self.loadModel(localWhisperModel)
-                                        } catch {
-                                            await self.logger.error("❌ Model loading failed: \(error.localizedDescription)")
-                                        }
-                                    }
-                                } else if let parakeetModel = await self.currentTranscriptionModel as? ParakeetModel {
+                                if let parakeetModel = await self.currentTranscriptionModel as? ParakeetModel {
                                     try? await self.serviceRegistry.parakeetTranscriptionService.loadModel(for: parakeetModel)
                                 }
 

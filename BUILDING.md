@@ -31,8 +31,6 @@ make dev
 ### Available Makefile Commands
 
 - `make check` or `make healthcheck` - Verify all required tools are installed
-- `make whisper` - Clone and build whisper.cpp XCFramework automatically
-- `make setup` - Prepare the whisper framework for linking
 - `make build` - Build the VoiceInk Xcode project
 - `make run` - Launch the built VoiceInk app
 - `make dev` - Build and run (ideal for development workflow)
@@ -43,29 +41,16 @@ make dev
 ### How the Makefile Helps
 
 The Makefile automatically:
-1. **Manages Dependencies**: Creates a dedicated `~/VoiceInk-Dependencies` directory for all external frameworks
-2. **Builds Whisper Framework**: Clones whisper.cpp and builds the XCFramework with the correct configuration
-3. **Handles Framework Linking**: Sets up the whisper.xcframework in the proper location for Xcode to find
-4. **Verifies Prerequisites**: Checks that git, xcodebuild, and swift are installed before building
-5. **Streamlines Development**: Provides convenient shortcuts for common development tasks
+1. **Verifies Prerequisites**: Checks that git, xcodebuild, and swift are installed before building
+2. **Streamlines Development**: Provides convenient shortcuts for common development tasks
 
-This approach ensures consistent builds across different machines and eliminates manual framework setup errors.
+This approach ensures consistent builds across different machines.
 
 ---
 
 ## Manual Build Process (Alternative)
 
 If you prefer to build manually or need more control over the build process, follow these steps:
-
-### Building whisper.cpp Framework
-
-1. Clone and build whisper.cpp:
-```bash
-git clone https://github.com/ggerganov/whisper.cpp.git
-cd whisper.cpp
-./build-xcframework.sh
-```
-This will create the XCFramework at `build-apple/whisper.xcframework`.
 
 ### Building VoiceInk
 

@@ -114,6 +114,12 @@ class ChatGPTBrowserService: NSObject, ObservableObject {
     
     private override init() {
         super.init()
+        // Removed auto-init: setupBrowser() is now called on-demand
+    }
+    
+    /// Initializes the browser and loads ChatGPT. Safe to call multiple times (will only setup once).
+    func prepare() {
+        guard webView == nil else { return } // Already set up
         setupBrowser()
     }
     

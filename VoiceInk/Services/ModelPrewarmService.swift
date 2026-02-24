@@ -97,13 +97,13 @@ final class ModelPrewarmService: ObservableObject {
             return false
         }
 
-        // Only prewarm local models (Parakeet and Whisper need ANE compilation)
+        // Only prewarm on-device models that benefit from a warm start.
         guard let model = whisperState.currentTranscriptionModel else {
             return false
         }
 
         switch model.provider {
-        case .local, .parakeet:
+        case .parakeet:
             return true
         default:
             logger.notice("🌅 Skipping prewarm - cloud models don't need it")

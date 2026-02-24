@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 
 enum ModelFilter: String, CaseIterable, Identifiable {
     case recommended = "Recommended"
-    case local = "Local"
     case cloud = "Cloud"
     case custom = "Custom"
     var id: String { self.rawValue }
@@ -33,10 +32,6 @@ struct ModelManagementView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                if SystemArchitecture.isIntelMac {
-                    intelMacWarningBanner
-                }
-
                 defaultModelSection
                 languageSelectionSection
                 availableModelsSection
@@ -123,9 +118,6 @@ struct ModelManagementView: View {
             } else {
                 VStack(spacing: 12) {
                     ForEach(filteredModels, id: \.id) { model in
-                        let isWarming = (model as? LocalModel).map { localModel in
-                            warmupCoordinator.isWarming(modelNamed: localModel.name)
-                        } ?? false
 
                         ModelCardRowView(
                             model: model,
@@ -134,7 +126,7 @@ struct ModelManagementView: View {
                             isCurrent: whisperState.currentTranscriptionModel?.name == model.name,
                             downloadProgress: whisperState.downloadProgress,
                             modelURL: whisperState.availableModels.first { $0.name == model.name }?.url,
-                            isWarming: isWarming,
+                            isWarming: false,
                             deleteAction: {
                                 if let customModel = model as? CustomCloudModel {
                                     alertTitle = "Delete Custom Model"
@@ -161,39 +153,12 @@ struct ModelManagementView: View {
                                 }
                             },
                             downloadAction: {
-                                if let localModel = model as? LocalModel {
-                                    Task { await whisperState.downloadModel(localModel) }
-                                }
+
                             },
                             editAction: model.provider == .custom ? { customModel in
                                 customModelToEdit = customModel
                             } : nil
                         )
-                    }
-                    
-                    // Import button as a card at the end of the Local list
-                    if selectedFilter == .local {
-                        HStack(spacing: 8) {
-                            Button(action: { presentImportPanel() }) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "square.and.arrow.down")
-                                    Text("Import Local Model…")
-                                        .font(.system(size: 12, weight: .semibold))
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(16)
-                                .background(CardBackground(isSelected: false))
-                                .cornerRadius(10)
-                            }
-                            .buttonStyle(.plain)
-
-                            InfoTip(
-                                title: "Import local Whisper models",
-                                message: "Add a custom fine-tuned whisper model to use with VoiceInk. Select the downloaded .bin file.",
-                                learnMoreURL: "https://tryvoiceink.com/docs/custom-local-whisper-models"
-                            )
-                            .help("Read more about custom local models")
-                        }
                     }
                     
                     if selectedFilter == .custom {
@@ -213,77 +178,23 @@ struct ModelManagementView: View {
         .padding()
     }
 
-    private var intelMacWarningBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.orange)
-
-            Text("Local models don't work reliably on Intel Macs")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.primary.opacity(0.85))
-
-            Spacer()
-
-            Button(action: {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    selectedFilter = .cloud
-                }
-            }) {
-                HStack(spacing: 4) {
-                    Text("Use Cloud")
-                        .font(.system(size: 12, weight: .semibold))
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 10, weight: .bold))
-                }
-                .foregroundColor(.orange)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.orange.opacity(0.12))
-                .cornerRadius(6)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Color.orange.opacity(0.08))
-        .cornerRadius(8)
-    }
-
     private var filteredModels: [any TranscriptionModel] {
         switch selectedFilter {
         case .recommended:
             return whisperState.allAvailableModels.filter {
-                let recommendedNames = ["ggml-base.en", "ggml-large-v3-turbo-q5_0", "ggml-large-v3-turbo", "whisper-large-v3-turbo"]
+                let recommendedNames = ["whisper-large-v3-turbo", "nova-2", "whisper-1"]
                 return recommendedNames.contains($0.name)
             }.sorted { model1, model2 in
-                let recommendedOrder = ["ggml-base.en", "ggml-large-v3-turbo-q5_0", "ggml-large-v3-turbo", "whisper-large-v3-turbo"]
+                let recommendedOrder = ["whisper-large-v3-turbo", "nova-2", "whisper-1"]
                 let index1 = recommendedOrder.firstIndex(of: model1.name) ?? Int.max
                 let index2 = recommendedOrder.firstIndex(of: model2.name) ?? Int.max
                 return index1 < index2
             }
-        case .local:
-            return whisperState.allAvailableModels.filter { $0.provider == .local || $0.provider == .nativeApple || $0.provider == .parakeet }
         case .cloud:
             let cloudProviders: [ModelProvider] = [.groq, .elevenLabs, .deepgram, .mistral, .gemini, .soniox]
             return whisperState.allAvailableModels.filter { cloudProviders.contains($0.provider) }
         case .custom:
             return whisperState.allAvailableModels.filter { $0.provider == .custom }
-        }
-    }
-
-    // MARK: - Import Panel
-    private func presentImportPanel() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.init(filenameExtension: "bin")!]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.resolvesAliases = true
-        panel.title = "Select a Whisper ggml .bin model"
-        if panel.runModal() == .OK, let url = panel.url {
-            Task { @MainActor in
-                await whisperState.importLocalModel(from: url)
-            }
         }
     }
 }

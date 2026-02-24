@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 
 @MainActor
 extension WhisperState {
@@ -16,15 +15,9 @@ extension WhisperState {
         self.currentTranscriptionModel = model
         UserDefaults.standard.set(model.name, forKey: "CurrentTranscriptionModel")
         
-        // For cloud models, clear the old loadedLocalModel
-        if model.provider != .local {
-            self.loadedLocalModel = nil
-        }
+        // On-device model warmup/loading is handled by provider-specific services.
+        self.isModelLoaded = true
         
-        // Enable transcription for cloud models immediately since they don't need loading
-        if model.provider != .local {
-            self.isModelLoaded = true
-        }
         // Post notification about the model change
         NotificationCenter.default.post(name: .didChangeModel, object: nil, userInfo: ["modelName": model.name])
         NotificationCenter.default.post(name: .AppSettingsDidChange, object: nil)
@@ -32,19 +25,11 @@ extension WhisperState {
     
     func refreshAllAvailableModels() {
         let currentModelName = currentTranscriptionModel?.name
-        var models = PredefinedModels.models
+        allAvailableModels = PredefinedModels.models
+        // Legacy compatibility: keep the old local-model list empty now that whisper.cpp is removed.
+        availableModels = []
 
-        // Append dynamically discovered local models (imported .bin files) with minimal metadata
-        for whisperModel in availableModels {
-            if !models.contains(where: { $0.name == whisperModel.name }) {
-                let importedModel = ImportedLocalModel(fileBaseName: whisperModel.name)
-                models.append(importedModel)
-            }
-        }
-
-        allAvailableModels = models
-
-        // Preserve current selection by name (IDs may change for dynamic models)
+        // Preserve current selection by name
         if let currentName = currentModelName,
            let updatedModel = allAvailableModels.first(where: { $0.name == currentName }) {
             setDefaultTranscriptionModel(updatedModel)
