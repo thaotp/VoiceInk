@@ -344,7 +344,7 @@ struct LyricModeSettingsView: View {
                     .frame(width: 200)
                 }
                 
-                Divider()
+
                 
                 // Speaker Diarization Toggle
                 CustomToggle(
@@ -387,6 +387,16 @@ struct LyricModeSettingsView: View {
             } else {
                 Text("Standard on-device speech recognition.")
                     .foregroundColor(.secondary)
+            }
+            
+            if settings.appleSpeechMode == .standard {
+                Divider()
+                
+                CustomToggle(
+                    title: "Punctuation-Only Mode",
+                    subtitle: "Only emit segments on punctuation marks",
+                    isOn: $settings.appleSpeechPunctuationOnly
+                )
             }
         }
     }

@@ -32,6 +32,7 @@ struct LyricModeMainView: View {
     
     // Segment management
     @State private var ignoredSegments: Set<Int> = []
+    @State private var segmentCreationTimes: [Int: Date] = [:]
     
     // Track segments created by Live Translation mode to avoid duplicates
     @State private var liveTranslationCreatedSegments: Set<String> = []
@@ -45,6 +46,11 @@ struct LyricModeMainView: View {
     
     // Track which segments are showing original (pre-correction) text
     @State private var showingOriginal: Set<Int> = []
+    
+    // Cache joined segments to avoid O(N) join on every partial update
+    @State private var cachedAllConfirmed: String = ""
+    // Tracks how many segments were known at last handleTranscriptSegmentsUpdate
+    @State private var lastKnownSegmentCount: Int = 0
 
     
     private let translationService = LyricModeTranslationService()
@@ -382,44 +388,48 @@ struct LyricModeMainView: View {
                             }
                             
                             // Display each transcript segment in REVERSED order (newest first)
-                            ForEach(Array(transcriptSegments.enumerated().reversed()), id: \.offset) { index, segment in
-                                SegmentRowView(
-                                    index: index,
-                                    segment: segment,
-                                    translation: index < translatedSegments.count ? translatedSegments[index] : "",
-                                    fontSize: settings.fontSize,
-                                    isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty,
-                                    isIgnored: ignoredSegments.contains(index),
-                                    translationEnabled: settings.translationEnabled,
-                                    originalText: originalTextMap[segment] ?? "",
-                                    isShowingOriginal: showingOriginal.contains(index),
-                                    postProcessingEnabled: settings.postProcessingEnabled,
-                                    onCopy: {
-                                        NSPasteboard.general.clearContents()
-                                        NSPasteboard.general.setString(segment, forType: .string)
-                                        showToastMessage("Copied to clipboard", icon: "doc.on.doc", color: .blue)
-                                    },
-                                    onRetranslate: {
-                                        retranslateSegment(at: index, text: segment)
-                                    },
-                                    onToggleIgnore: {
-                                        if ignoredSegments.contains(index) {
-                                            ignoredSegments.remove(index)
-                                            showToastMessage("Segment restored", icon: "eye", color: .green)
-                                        } else {
-                                            ignoredSegments.insert(index)
-                                            showToastMessage("Segment ignored", icon: "eye.slash", color: .orange)
+                            // TimelineView re-evaluates every 5s so the "NEW" badge expires
+                            TimelineView(.periodic(from: .now, by: 5.0)) { timeline in
+                                ForEach(Array(transcriptSegments.enumerated().reversed()), id: \.offset) { index, segment in
+                                    SegmentRowView(
+                                        index: index,
+                                        segment: segment,
+                                        translation: index < translatedSegments.count ? translatedSegments[index] : "",
+                                        fontSize: settings.fontSize,
+                                        isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty,
+                                        isIgnored: ignoredSegments.contains(index),
+                                        isNew: isSegmentNew(index, at: timeline.date),
+                                        translationEnabled: settings.translationEnabled,
+                                        originalText: originalTextMap[segment] ?? "",
+                                        isShowingOriginal: showingOriginal.contains(index),
+                                        postProcessingEnabled: settings.postProcessingEnabled,
+                                        onCopy: {
+                                            NSPasteboard.general.clearContents()
+                                            NSPasteboard.general.setString(segment, forType: .string)
+                                            showToastMessage("Copied to clipboard", icon: "doc.on.doc", color: .blue)
+                                        },
+                                        onRetranslate: {
+                                            retranslateSegment(at: index, text: segment)
+                                        },
+                                        onToggleIgnore: {
+                                            if ignoredSegments.contains(index) {
+                                                ignoredSegments.remove(index)
+                                                showToastMessage("Segment restored", icon: "eye", color: .green)
+                                            } else {
+                                                ignoredSegments.insert(index)
+                                                showToastMessage("Segment ignored", icon: "eye.slash", color: .orange)
+                                            }
+                                        },
+                                        onToggleOriginal: {
+                                            if showingOriginal.contains(index) {
+                                                showingOriginal.remove(index)
+                                            } else {
+                                                showingOriginal.insert(index)
+                                            }
                                         }
-                                    },
-                                    onToggleOriginal: {
-                                        if showingOriginal.contains(index) {
-                                            showingOriginal.remove(index)
-                                        } else {
-                                            showingOriginal.insert(index)
-                                        }
-                                    }
-                                )
-                                .equatable() // Explicitly enable Equatable check
+                                    )
+                                    .equatable() // Explicitly enable Equatable check
+                                }
                             }
                         }
                     }
@@ -635,6 +645,18 @@ struct LyricModeMainView: View {
     
     // MARK: - Helpers
     
+    /// Record the creation time for a newly appended segment
+    private func trackSegmentCreation(at index: Int) {
+        segmentCreationTimes[index] = Date()
+        lastKnownSegmentCount = transcriptSegments.count
+    }
+    
+    /// Check whether a segment is considered "new" (created within the last 20 seconds)
+    private func isSegmentNew(_ index: Int, at now: Date) -> Bool {
+        guard let created = segmentCreationTimes[index] else { return false }
+        return now.timeIntervalSince(created) < 20
+    }
+    
     private var formattedDate: String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -680,6 +702,8 @@ struct LyricModeMainView: View {
             pendingTranslations.removeAll()
             showingOriginal.removeAll()
             ignoredSegments.removeAll()
+            segmentCreationTimes.removeAll()
+            lastKnownSegmentCount = 0
             
             // Clear translation history for new session context
             translationService.clearHistory()
@@ -760,6 +784,7 @@ struct LyricModeMainView: View {
             // Mark as unfinished with asterisk
             let unfinishedText = partial + " *"
             transcriptSegments.append(unfinishedText)
+            trackSegmentCreation(at: transcriptSegments.count - 1)
             syncTranslatedSegmentsCount()
             translateSegment(at: transcriptSegments.count - 1, text: partial)
         }
@@ -813,6 +838,8 @@ struct LyricModeMainView: View {
         }
         transcriptSegments = []
         translatedSegments = []
+        segmentCreationTimes.removeAll()
+        lastKnownSegmentCount = 0
         // Cancel translations
         Task {
              await translationService.cancelPendingRequests()
@@ -872,8 +899,8 @@ struct LyricModeMainView: View {
         }
         
         // Update partial text display, filtering out already confirmed segments
-        let allConfirmed = transcriptSegments.joined(separator: " ")
-        if let uniquePartial = TranscriptTextProcessor.removeOverlap(from: text, existingText: allConfirmed) {
+        // Uses cachedAllConfirmed (updated in handleTranscriptSegmentsUpdate) to avoid O(N) join per partial update
+        if let uniquePartial = TranscriptTextProcessor.removeOverlap(from: text, existingText: cachedAllConfirmed) {
             partialText = uniquePartial
         } else {
             partialText = "" // Fully overlapped/confirmed
@@ -885,6 +912,18 @@ struct LyricModeMainView: View {
         // Note: transcriptSegments is a computed property that already points to lyricModeManager.transcriptSegments
         // We only need to sync the translated segments count when the source changes
         syncTranslatedSegmentsCount()
+        cachedAllConfirmed = segments.joined(separator: " ")
+        
+        // Track creation times for externally-added segments (e.g. Teams captions)
+        if segments.count > lastKnownSegmentCount {
+            let now = Date()
+            for i in lastKnownSegmentCount..<segments.count {
+                if segmentCreationTimes[i] == nil {
+                    segmentCreationTimes[i] = now
+                }
+            }
+        }
+        lastKnownSegmentCount = segments.count
     }
     
     private func processLiveTranslation(from text: String) {
@@ -1007,6 +1046,7 @@ struct LyricModeMainView: View {
                 // Prepend incomplete part to new segment
                 let newText = incomplete + trimmedText
                 transcriptSegments.append(newText)
+                trackSegmentCreation(at: transcriptSegments.count - 1)
                 syncTranslatedSegmentsCount()
                 
                 // Only translate the NEW partial segment if it's considered complete (or continuity is disabled)
@@ -1061,6 +1101,7 @@ struct LyricModeMainView: View {
         
         // Normal case: append as new paragraph
         transcriptSegments.append(trimmedText)
+        trackSegmentCreation(at: transcriptSegments.count - 1)
         syncTranslatedSegmentsCount()
         
         // Only translate if complete (when continuity is enabled)
@@ -1498,6 +1539,9 @@ struct LyricModeSettingsPopup: View {
     // Sentence continuity state
     @State private var localSentenceContinuityEnabled: Bool = true
     
+    // Punctuation-Only mode state
+    @State private var localPunctuationOnly: Bool = false
+    
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -1571,6 +1615,9 @@ struct LyricModeSettingsPopup: View {
             // Sentence continuity
             localSentenceContinuityEnabled = settings.sentenceContinuityEnabled
             
+            // Punctuation-Only
+            localPunctuationOnly = settings.appleSpeechPunctuationOnly
+            
             // Speaker diarization
             localSpeakerDiarizationEnabled = settings.speakerDiarizationEnabled
             localDiarizationBackend = settings.diarizationBackend
@@ -1607,6 +1654,7 @@ struct LyricModeSettingsPopup: View {
         localPostProcessingTimeout != settings.postProcessingTimeout ||
         localSentenceContinuityEnabled != settings.sentenceContinuityEnabled ||
         localSentenceContinuityEnabled != settings.sentenceContinuityEnabled ||
+        localPunctuationOnly != settings.appleSpeechPunctuationOnly ||
         localSpeakerDiarizationEnabled != settings.speakerDiarizationEnabled ||
         localDiarizationBackend != settings.diarizationBackend ||
         localDeduplicationEnabled != settings.deduplicationEnabled ||
@@ -1652,6 +1700,9 @@ struct LyricModeSettingsPopup: View {
         
         // Sentence continuity setting
         settings.sentenceContinuityEnabled = localSentenceContinuityEnabled
+        
+        // Punctuation-Only setting
+        settings.appleSpeechPunctuationOnly = localPunctuationOnly
         
         // Speaker diarization setting
         settings.speakerDiarizationEnabled = localSpeakerDiarizationEnabled
@@ -2026,6 +2077,21 @@ extension LyricModeSettingsPopup {
                 Text("Using SFSpeechRecognizer")
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+            
+            if localAppleSpeechMode == .standard {
+                Divider()
+                
+                Toggle(isOn: $localPunctuationOnly) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Punctuation-Only Mode")
+                            .font(.subheadline)
+                        Text("Only emit segments on punctuation marks")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
             }
         }
     }
@@ -2442,6 +2508,7 @@ struct SegmentRowView: View, Equatable {
     let fontSize: CGFloat
     let isLatest: Bool
     let isIgnored: Bool
+    let isNew: Bool
     let translationEnabled: Bool
     
     // Show Original feature
@@ -2464,6 +2531,7 @@ struct SegmentRowView: View, Equatable {
                lhs.fontSize == rhs.fontSize &&
                lhs.isLatest == rhs.isLatest &&
                lhs.isIgnored == rhs.isIgnored &&
+               lhs.isNew == rhs.isNew &&
                lhs.translationEnabled == rhs.translationEnabled &&
                lhs.originalText == rhs.originalText &&
                lhs.isShowingOriginal == rhs.isShowingOriginal &&
@@ -2480,7 +2548,8 @@ struct SegmentRowView: View, Equatable {
                 TranscriptParagraphView(
                     text: displayText,
                     fontSize: fontSize,
-                    isLatest: isLatest
+                    isLatest: isLatest,
+                    isNew: isNew
                 )
                 .opacity(isIgnored ? 0.5 : 1.0)
                 
@@ -2505,7 +2574,7 @@ struct SegmentRowView: View, Equatable {
             .frame(maxWidth: .infinity, alignment: .leading)
             
             // Action buttons container (always present for consistent hover area)
-            HStack(spacing: 4) {
+            VStack(spacing: 4) {
                 // Copy button
                 Button(action: onCopy) {
                     Image(systemName: "doc.on.doc")
@@ -2577,12 +2646,13 @@ struct TranscriptParagraphView: View {
     let text: String
     let fontSize: CGFloat
     let isLatest: Bool
+    let isNew: Bool
     
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             // Visual indicator bar
             RoundedRectangle(cornerRadius: 2)
-                .fill(isLatest ? Color.accentColor : Color.secondary.opacity(0.3))
+                .fill(isNew ? Color.green : (isLatest ? Color.accentColor : Color.secondary.opacity(0.3)))
                 .frame(width: 3)
             
             // Text content
@@ -2597,7 +2667,8 @@ struct TranscriptParagraphView: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isLatest ? Color.accentColor.opacity(0.05) : Color.clear)
+                .fill(isNew ? Color.green.opacity(0.08) : (isLatest ? Color.accentColor.opacity(0.05) : Color.clear))
+                .animation(.easeOut(duration: 1.0), value: isNew)
         )
     }
 }

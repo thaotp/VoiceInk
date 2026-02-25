@@ -136,6 +136,7 @@ class LyricModeSettings: ObservableObject {
     
     // Apple Speech specific settings
     @AppStorage("lyricMode.appleSpeechMode") var appleSpeechModeRaw: String = AppleSpeechMode.standard.rawValue
+    @AppStorage("lyricMode.appleSpeechPunctuationOnly") var appleSpeechPunctuationOnly: Bool = false
     @AppStorage("lyricMode.speakerDiarizationEnabled") var speakerDiarizationEnabled: Bool = false
     @AppStorage("lyricMode.diarizationBackend") var diarizationBackendRaw: String = DiarizationBackend.fluidAudio.rawValue
     

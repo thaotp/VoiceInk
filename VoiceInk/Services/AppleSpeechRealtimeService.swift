@@ -261,16 +261,18 @@ final class AppleSpeechRealtimeService: ObservableObject {
                 
                 // === Streaming NLP Semantics for Japanese ===
                 // Stabilization-based sentence splitting
-                let tokenizer = NLTokenizer(unit: .sentence)
                 var lastText: String = ""
                 var lastTextChangeTime: Date = Date()
                 var shippedPrefixLength: Int = 0
+                var carryBuffer: String = ""
                 let sentenceEnders: Set<Character> = ["。", "？", "！", ".", "?", "!"]
                 let stabilityThreshold: TimeInterval = 1.5
+                let punctuationOnly = UserDefaults.standard.bool(forKey: "lyricMode.appleSpeechPunctuationOnly")
+                let langCode = selectedLocale.languageCode ?? "en"
                 
                 for try await result in transcriber.results {
                     let text = String(result.text.characters).trimmingCharacters(in: .whitespaces)
-                    guard !text.isEmpty else { continue }
+                    guard !text.isEmpty || !carryBuffer.isEmpty else { continue }
                     
                     let now = Date()
                     
@@ -283,31 +285,49 @@ final class AppleSpeechRealtimeService: ObservableObject {
                     let timeSinceLastChange = now.timeIntervalSince(lastTextChangeTime)
                     let isStable = timeSinceLastChange >= stabilityThreshold
                     
-                    // Determine unshipped text
-                    let unshippedText = text.count > shippedPrefixLength
+                    // Determine unshipped text from current utterance
+                    let currentUtteranceUnshipped = text.count > shippedPrefixLength
                         ? String(text.dropFirst(shippedPrefixLength)).trimmingCharacters(in: .whitespaces)
                         : ""
+                    
+                    let needsSpace = !carryBuffer.isEmpty && !currentUtteranceUnshipped.isEmpty && langCode != "ja" && langCode != "zh"
+                    let unshippedText = carryBuffer + (needsSpace ? " " : "") + currentUtteranceUnshipped
                     
                     // Decision logic (Conservative: Only split on EXPLICIT punctuation)
                     var textToFinalize: String? = nil
                     var remainderText: String = ""
                     
-                    if result.isFinal {
-                        textToFinalize = unshippedText.isEmpty ? nil : unshippedText
-                        remainderText = ""
-                    } else if isStable && !unshippedText.isEmpty {
-                        // CONSERVATIVE: Only split if we find EXPLICIT punctuation
-                        if let lastPunctuationIndex = unshippedText.lastIndex(where: { sentenceEnders.contains($0) }) {
-                            let endIndex = unshippedText.index(after: lastPunctuationIndex)
-                            textToFinalize = String(unshippedText[..<endIndex]).trimmingCharacters(in: .whitespaces)
-                            
-                            if endIndex < unshippedText.endIndex {
-                                remainderText = String(unshippedText[endIndex...]).trimmingCharacters(in: .whitespaces)
-                            } else {
-                                remainderText = ""
+                    if punctuationOnly {
+                        if !unshippedText.isEmpty {
+                            if let lastPunctuationIndex = unshippedText.lastIndex(where: { sentenceEnders.contains($0) }) {
+                                let endIndex = unshippedText.index(after: lastPunctuationIndex)
+                                textToFinalize = String(unshippedText[..<endIndex]).trimmingCharacters(in: .whitespaces)
+                                
+                                if endIndex < unshippedText.endIndex {
+                                    remainderText = String(unshippedText[endIndex...]).trimmingCharacters(in: .whitespaces)
+                                } else {
+                                    remainderText = ""
+                                }
                             }
                         }
-                        // If no punctuation found, do NOT split
+                    } else {
+                        if result.isFinal {
+                            textToFinalize = unshippedText.isEmpty ? nil : unshippedText
+                            remainderText = ""
+                        } else if isStable && !unshippedText.isEmpty {
+                            // CONSERVATIVE: Only split if we find EXPLICIT punctuation
+                            if let lastPunctuationIndex = unshippedText.lastIndex(where: { sentenceEnders.contains($0) }) {
+                                let endIndex = unshippedText.index(after: lastPunctuationIndex)
+                                textToFinalize = String(unshippedText[..<endIndex]).trimmingCharacters(in: .whitespaces)
+                                
+                                if endIndex < unshippedText.endIndex {
+                                    remainderText = String(unshippedText[endIndex...]).trimmingCharacters(in: .whitespaces)
+                                } else {
+                                    remainderText = ""
+                                }
+                            }
+                            // If no punctuation found, do NOT split
+                        }
                     }
                     
                     // Emit finalized sentences
@@ -319,25 +339,39 @@ final class AppleSpeechRealtimeService: ObservableObject {
                             // Note: Post-processing is now handled by the View layer
                             // to ensure translation runs on raw text independently.
                         }
-                        shippedPrefixLength = text.count - remainderText.count
+                        
+                        let currentLength = currentUtteranceUnshipped.count
+                        
+                        // Carefully track what's left in carryBuffer vs current text
+                        if remainderText.count <= currentLength {
+                            carryBuffer = ""
+                            shippedPrefixLength = text.count - remainderText.count
+                        } else {
+                            // We emitted part of carryBuffer, but not all.
+                            carryBuffer = String(remainderText.dropLast(currentLength + (needsSpace ? 1 : 0)))
+                            // shippedPrefixLength doesn't change because we didn't consume any of `text`
+                        }
                     }
                     
-                    // Update partial transcript
-                    let currentUnshipped = text.count > shippedPrefixLength
-                        ? String(text.dropFirst(shippedPrefixLength)).trimmingCharacters(in: .whitespaces)
-                        : ""
+                    // Update partial transcript (includes carryBuffer so words don't visually disappear)
+                    let currentPartial = textToFinalize != nil ? remainderText : unshippedText
                     
-                    if !result.isFinal {
+                    if !result.isFinal || punctuationOnly {
                         await MainActor.run {
-                            self.partialTranscript = currentUnshipped
+                            self.partialTranscript = currentPartial
                         }
                     }
                     
                     // Reset on isFinal
                     if result.isFinal {
-                        await MainActor.run {
-                            self.partialTranscript = ""
+                        carryBuffer = currentPartial
+                        
+                        if !punctuationOnly {
+                            await MainActor.run {
+                                self.partialTranscript = ""
+                            }
                         }
+                        
                         lastText = ""
                         lastTextChangeTime = Date()
                         shippedPrefixLength = 0
