@@ -45,6 +45,7 @@ enum DiarizationBackend: String, CaseIterable, Identifiable {
 enum TranslationProvider: String, CaseIterable, Identifiable {
     case ollama = "Ollama"
     case chatGPT = "ChatGPT"
+    case gemini = "Gemini"
     
     var id: String { rawValue }
     
@@ -54,6 +55,8 @@ enum TranslationProvider: String, CaseIterable, Identifiable {
             return "Local AI translation using Ollama"
         case .chatGPT:
             return "OpenAI's ChatGPT via browser"
+        case .gemini:
+            return "Google Gemini API translation"
         }
     }
     
@@ -63,6 +66,8 @@ enum TranslationProvider: String, CaseIterable, Identifiable {
             return "server.rack"
         case .chatGPT:
             return "globe"
+        case .gemini:
+            return "sparkle"
         }
     }
 }
@@ -115,6 +120,7 @@ class LyricModeSettings: ObservableObject {
     @AppStorage("lyricMode.translateImmediately") var translateImmediately: Bool = false
     @AppStorage("lyricMode.targetLanguage") var targetLanguage: String = "Vietnamese"
     @AppStorage("lyricMode.translationProviderRaw") var translationProviderRaw: String = TranslationProvider.ollama.rawValue
+    @AppStorage("lyricMode.selectedGeminiModel") var selectedGeminiModel: String = "gemini-2.0-flash"
     
     var translationProvider: TranslationProvider {
         get { TranslationProvider(rawValue: translationProviderRaw) ?? .ollama }

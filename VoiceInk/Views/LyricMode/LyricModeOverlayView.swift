@@ -6,11 +6,11 @@ struct LyricModeOverlayView: View {
     @ObservedObject var transcriptionEngine: RealtimeTranscriptionEngine
     @ObservedObject var settings: LyricModeSettings
     
-    @State private var scrollProxy: ScrollViewProxy?
     @State private var isHovering = false
-    @State private var shouldAutoScroll = true
-    @State private var lastAutoScrollTime = Date.distantPast
-    @State private var lastDataUpdateTime = Date.distantPast
+    
+    // MeCab-formatted display text cache (display-only, keyed by original text)
+    @State private var mecabFormattedLines: [String: String] = [:]
+    @State private var mecabFormattedPartial: String = ""
     
     var body: some View {
         ZStack {
@@ -87,90 +87,47 @@ struct LyricModeOverlayView: View {
     // MARK: - Transcription Content
     
     private var transcriptionContent: some View {
-        ScrollViewReader { proxy in
-            ZStack(alignment: .bottomTrailing) {
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        // Confirmed lines
-                        ForEach(Array(visibleConfirmedLines.enumerated()), id: \.offset) { index, line in
-                            confirmedLineView(line, isLatest: index == visibleConfirmedLines.count - 1)
-                                .id("confirmed-\(index)")
-                        }
-                        
-                        // Partial/current line
-                        if !transcriptionEngine.partialLine.isEmpty {
-                            partialLineView
-                                .id("partial")
-                        }
-                        
-                        // Anchor for auto-scroll
-                        Color.clear
-                            .frame(height: 1)
-                            .id("bottom")
-                            .onAppear {
-                                shouldAutoScroll = true
-                            }
-                            .onDisappear {
-                                let now = Date()
-                                let timeSinceAutoScroll = now.timeIntervalSince(lastAutoScrollTime)
-                                let timeSinceData = now.timeIntervalSince(lastDataUpdateTime)
-                                
-                                if timeSinceAutoScroll > 0.5 && timeSinceData > 0.5 {
-                                    shouldAutoScroll = false
-                                }
-                            }
-                    }
-                    .padding(.vertical, 4)
-                }
-                .onAppear {
-                    scrollProxy = proxy
-                }
-                .onChange(of: transcriptionEngine.confirmedLines.count) { _, _ in
-                    lastDataUpdateTime = Date()
-                    if shouldAutoScroll {
-                        lastAutoScrollTime = Date()
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            proxy.scrollTo("bottom", anchor: .bottom)
-                        }
-                    }
-                }
-                .onChange(of: transcriptionEngine.partialLine) { _, _ in
-                    lastDataUpdateTime = Date()
-                    if shouldAutoScroll {
-                        lastAutoScrollTime = Date()
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo("bottom", anchor: .bottom)
-                        }
-                    }
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(alignment: .leading, spacing: 8) {
+                // Confirmed lines
+                ForEach(Array(visibleConfirmedLines.enumerated()), id: \.offset) { index, line in
+                    confirmedLineView(line, isLatest: index == visibleConfirmedLines.count - 1)
+                        .id("confirmed-\(index)")
                 }
                 
-                // Resume Button
-                if !shouldAutoScroll && (!transcriptionEngine.confirmedLines.isEmpty || !transcriptionEngine.partialLine.isEmpty) {
-                    Button(action: {
-                        shouldAutoScroll = true
-                        lastAutoScrollTime = Date()
-                        withAnimation {
-                            proxy.scrollTo("bottom", anchor: .bottom)
-                        }
-                    }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.down")
-                                .font(.system(size: 10, weight: .semibold))
-                            Text("Resume")
-                                .font(.system(size: 10, weight: .medium))
-                        }
-                        .foregroundColor(.white.opacity(0.8))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            Capsule()
-                                .fill(Color.white.opacity(0.15))
-                        )
-                        .padding(12)
-                    }
-                    .buttonStyle(.plain)
-                    .transition(.opacity.combined(with: .scale))
+                // Partial/current line
+                if !transcriptionEngine.partialLine.isEmpty {
+                    partialLineView
+                        .id("partial")
                 }
+            }
+            .padding(.vertical, 4)
+        }
+        .onChange(of: transcriptionEngine.confirmedLines.count) { _, _ in
+            // MeCab formatting for new confirmed lines (bunsetsu spacing)
+            // Skip when using Gemini - it returns spaced Japanese via its own API
+            if MeCabFormatterService.isJapanese(settings.selectedLanguage) && settings.translationProvider != .gemini {
+                let formatter = MeCabFormatterService.shared
+                for line in transcriptionEngine.confirmedLines {
+                    if mecabFormattedLines[line] == nil {
+                        Task {
+                            let formatted = await formatter.formatPlain(line)
+                            mecabFormattedLines[line] = formatted
+                        }
+                    }
+                }
+            }
+        }
+        .onChange(of: transcriptionEngine.partialLine) { _, newPartial in
+            // MeCab formatting for partial line (bunsetsu spacing)
+            // Skip when using Gemini - it returns spaced Japanese via its own API
+            if MeCabFormatterService.isJapanese(settings.selectedLanguage) && settings.translationProvider != .gemini && !newPartial.isEmpty {
+                Task {
+                    let formatted = await MeCabFormatterService.shared.formatPlain(newPartial)
+                    mecabFormattedPartial = formatted
+                }
+            } else {
+                mecabFormattedPartial = ""
             }
         }
     }
@@ -178,18 +135,22 @@ struct LyricModeOverlayView: View {
     // MARK: - Line Views
     
     private func confirmedLineView(_ text: String, isLatest: Bool) -> some View {
-        Text(text)
+        let displayText = mecabFormattedLines[text] ?? text
+        return Text(displayText)
             .font(.system(size: settings.fontSize, weight: isLatest ? .semibold : .regular))
             .foregroundColor(isLatest ? .white : .white.opacity(0.7))
             .lineLimit(nil)
             .multilineTextAlignment(.leading)
             .transition(.opacity.combined(with: .scale(scale: 0.95)))
-            .animation(.easeOut(duration: 0.3), value: text)
+            .animation(.easeOut(duration: 0.3), value: displayText)
     }
     
     private var partialLineView: some View {
-        HStack(spacing: 4) {
-            Text(transcriptionEngine.partialLine)
+        let displayPartial = MeCabFormatterService.isJapanese(settings.selectedLanguage) && settings.translationProvider != .gemini && !mecabFormattedPartial.isEmpty
+            ? mecabFormattedPartial
+            : transcriptionEngine.partialLine
+        return HStack(spacing: 4) {
+            Text(displayPartial)
                 .font(.system(size: settings.fontSize, weight: .semibold))
                 .foregroundColor(settings.showPartialHighlight ? .cyan : .white)
                 .lineLimit(nil)

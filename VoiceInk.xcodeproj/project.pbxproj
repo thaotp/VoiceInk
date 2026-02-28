@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		092C44BF2F1A7A97008F240D /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 092C44BE2F1A7A97008F240D /* WhisperKit */; };
+		09E15BC02F4E9F8200DC5850 /* IPADic in Frameworks */ = {isa = PBXBuildFile; productRef = 09E15BBF2F4E9F8200DC5850 /* IPADic */; };
+		09E15BC22F4E9F8200DC5850 /* Mecab-Swift in Frameworks */ = {isa = PBXBuildFile; productRef = 09E15BC12F4E9F8200DC5850 /* Mecab-Swift */; };
 		E11BBA4E2E5DC555000AB839 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = E11BBA4D2E5DC555000AB839 /* FluidAudio */; };
 		E1342C1F2EB4844800CED8A2 /* Atomics in Frameworks */ = {isa = PBXBuildFile; productRef = E1342C1E2EB4844800CED8A2 /* Atomics */; };
 		E1A261122CC143AC00B233D1 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = E1A261112CC143AC00B233D1 /* KeyboardShortcuts */; };
@@ -113,8 +115,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				E1342C1F2EB4844800CED8A2 /* Atomics in Frameworks */,
+				09E15BC02F4E9F8200DC5850 /* IPADic in Frameworks */,
 				E1ECEC162E44591300DFFBA8 /* Zip in Frameworks */,
 				092C44BF2F1A7A97008F240D /* WhisperKit in Frameworks */,
+				09E15BC22F4E9F8200DC5850 /* Mecab-Swift in Frameworks */,
 				E1ADD45A2CC5352A00303ECB /* LaunchAtLogin in Frameworks */,
 				E11BBA4E2E5DC555000AB839 /* FluidAudio in Frameworks */,
 				E1D7EF992E35E16C00640029 /* MediaRemoteAdapter in Frameworks */,
@@ -199,6 +203,8 @@
 				E1342C1E2EB4844800CED8A2 /* Atomics */,
 				E1F1037A2EF85FC700A4FF94 /* SelectedTextKit */,
 				092C44BE2F1A7A97008F240D /* WhisperKit */,
+				09E15BBF2F4E9F8200DC5850 /* IPADic */,
+				09E15BC12F4E9F8200DC5850 /* Mecab-Swift */,
 			);
 			productName = VoiceInk;
 			productReference = E11473B02CBE0F0A00318EE4 /* VoiceInk.app */;
@@ -292,6 +298,7 @@
 				E1342C1D2EB4844800CED8A2 /* XCRemoteSwiftPackageReference "swift-atomics" */,
 				E1F103792EF85FC700A4FF94 /* XCRemoteSwiftPackageReference "SelectedTextKit" */,
 				092C44BD2F1A77ED008F240D /* XCRemoteSwiftPackageReference "WhisperKit" */,
+				09E15BBE2F4E9B1E00DC5850 /* XCRemoteSwiftPackageReference "Mecab-Swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E11473B12CBE0F0A00318EE4 /* Products */;
@@ -692,6 +699,14 @@
 				kind = branch;
 			};
 		};
+		09E15BBE2F4E9B1E00DC5850 /* XCRemoteSwiftPackageReference "Mecab-Swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/shinjukunian/Mecab-Swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.8.0;
+			};
+		};
 		E11BBA4C2E5DC555000AB839 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/FluidInference/FluidAudio";
@@ -763,6 +778,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 092C44BD2F1A77ED008F240D /* XCRemoteSwiftPackageReference "WhisperKit" */;
 			productName = WhisperKit;
+		};
+		09E15BBF2F4E9F8200DC5850 /* IPADic */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 09E15BBE2F4E9B1E00DC5850 /* XCRemoteSwiftPackageReference "Mecab-Swift" */;
+			productName = IPADic;
+		};
+		09E15BC12F4E9F8200DC5850 /* Mecab-Swift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 09E15BBE2F4E9B1E00DC5850 /* XCRemoteSwiftPackageReference "Mecab-Swift" */;
+			productName = "Mecab-Swift";
 		};
 		E11BBA4D2E5DC555000AB839 /* FluidAudio */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -19,10 +19,6 @@ struct LyricModeMainView: View {
     // REMOVED: @State private var cancellables - using .onReceive() instead for proper SwiftUI subscription lifecycle
     @State private var isPaused = false
 
-    @State private var shouldAutoScroll = true
-    @State private var lastAutoScrollTime = Date.distantPast
-    @State private var lastDataUpdateTime = Date.distantPast
-    
     // Teams Live Captions window selection
     @State private var showingWindowSelection = false
     @StateObject private var teamsService = TeamsLiveCaptionsService()
@@ -47,6 +43,9 @@ struct LyricModeMainView: View {
     // Track which segments are showing original (pre-correction) text
     @State private var showingOriginal: Set<Int> = []
     
+    // MeCab-formatted display text cache (display-only, keyed by segment index)
+    @State private var mecabFormattedSegments: [Int: AttributedString] = [:]
+    
     // Cache joined segments to avoid O(N) join on every partial update
     @State private var cachedAllConfirmed: String = ""
     // Tracks how many segments were known at last handleTranscriptSegmentsUpdate
@@ -54,6 +53,7 @@ struct LyricModeMainView: View {
 
     
     private let translationService = LyricModeTranslationService()
+    private let geminiTranslationService = GeminiTranslationService()
     
     // Convenience accessors for manager's content state
 
@@ -345,134 +345,109 @@ struct LyricModeMainView: View {
         // Single view with inline translation support
         speechContentView
             .frame(maxHeight: .infinity)
-            .animation(.easeInOut(duration: 0.3), value: settings.translationEnabled)
     }
     
     private var speechContentView: some View {
-        ScrollViewReader { proxy in
-            ZStack(alignment: .topTrailing) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        if transcriptSegments.isEmpty && partialText.isEmpty && !lyricModeManager.isRecording {
-                            emptyState
-                        } else {
-                            // Scroll anchor at top (for reversed order)
-                            Color.clear
-                                .frame(height: 1)
-                                .id("top")
-                                .onAppear {
-                                    // If top appears, user is at top -> enable auto-scroll
-                                    shouldAutoScroll = true
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                if transcriptSegments.isEmpty && partialText.isEmpty && !lyricModeManager.isRecording {
+                    emptyState
+                } else {
+                    // Partial (in-progress) text at top
+                    if !partialText.isEmpty {
+                        Text(partialText)
+                            .font(.system(size: settings.fontSize))
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .id("partial")
+                    }
+                    
+                    // Display each transcript segment in REVERSED order (newest first)
+                    ForEach(Array(transcriptSegments.enumerated().reversed()), id: \.offset) { index, segment in
+                        SegmentRowView(
+                            index: index,
+                            segment: segment,
+                            displaySegment: mecabFormattedSegments[index],
+                            translation: index < translatedSegments.count ? translatedSegments[index] : "",
+                            fontSize: settings.fontSize,
+                            isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty,
+                            isIgnored: ignoredSegments.contains(index),
+                            creationDate: segmentCreationTimes[index],
+                            translationEnabled: settings.translationEnabled,
+                            originalText: originalTextMap[segment] ?? "",
+                            isShowingOriginal: showingOriginal.contains(index),
+                            postProcessingEnabled: settings.postProcessingEnabled,
+                            onCopy: {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(segment, forType: .string)
+                                showToastMessage("Copied to clipboard", icon: "doc.on.doc", color: .blue)
+                            },
+                            onRetranslate: {
+                                retranslateSegment(at: index, text: segment)
+                            },
+                            onToggleIgnore: {
+                                if ignoredSegments.contains(index) {
+                                    ignoredSegments.remove(index)
+                                    showToastMessage("Segment restored", icon: "eye", color: .green)
+                                } else {
+                                    ignoredSegments.insert(index)
+                                    showToastMessage("Segment ignored", icon: "eye.slash", color: .orange)
                                 }
-                                .onDisappear {
-                                    // Robust check: Only disable if it wasn't our own auto-scroll (within last 0.5s)
-                                    // AND not caused by a data update pushing content (within last 0.5s)
-                                    let now = Date()
-                                    let timeSinceScroll = now.timeIntervalSince(lastAutoScrollTime)
-                                    let timeSinceData = now.timeIntervalSince(lastDataUpdateTime)
-                                    
-                                    if timeSinceScroll > 0.5 && timeSinceData > 0.5 {
-                                        shouldAutoScroll = false
-                                    }
-                                }
-                            
-                            // Partial (in-progress) text at top
-                            if !partialText.isEmpty {
-                                Text(partialText)
-                                    .font(.system(size: settings.fontSize))
-                                    .foregroundColor(.cyan)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .id("partial")
-                            }
-                            
-                            // Display each transcript segment in REVERSED order (newest first)
-                            // TimelineView re-evaluates every 5s so the "NEW" badge expires
-                            TimelineView(.periodic(from: .now, by: 5.0)) { timeline in
-                                ForEach(Array(transcriptSegments.enumerated().reversed()), id: \.offset) { index, segment in
-                                    SegmentRowView(
-                                        index: index,
-                                        segment: segment,
-                                        translation: index < translatedSegments.count ? translatedSegments[index] : "",
-                                        fontSize: settings.fontSize,
-                                        isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty,
-                                        isIgnored: ignoredSegments.contains(index),
-                                        isNew: isSegmentNew(index, at: timeline.date),
-                                        translationEnabled: settings.translationEnabled,
-                                        originalText: originalTextMap[segment] ?? "",
-                                        isShowingOriginal: showingOriginal.contains(index),
-                                        postProcessingEnabled: settings.postProcessingEnabled,
-                                        onCopy: {
-                                            NSPasteboard.general.clearContents()
-                                            NSPasteboard.general.setString(segment, forType: .string)
-                                            showToastMessage("Copied to clipboard", icon: "doc.on.doc", color: .blue)
-                                        },
-                                        onRetranslate: {
-                                            retranslateSegment(at: index, text: segment)
-                                        },
-                                        onToggleIgnore: {
-                                            if ignoredSegments.contains(index) {
-                                                ignoredSegments.remove(index)
-                                                showToastMessage("Segment restored", icon: "eye", color: .green)
-                                            } else {
-                                                ignoredSegments.insert(index)
-                                                showToastMessage("Segment ignored", icon: "eye.slash", color: .orange)
-                                            }
-                                        },
-                                        onToggleOriginal: {
-                                            if showingOriginal.contains(index) {
-                                                showingOriginal.remove(index)
-                                            } else {
-                                                showingOriginal.insert(index)
-                                            }
-                                        }
-                                    )
-                                    .equatable() // Explicitly enable Equatable check
+                            },
+                            onToggleOriginal: {
+                                if showingOriginal.contains(index) {
+                                    showingOriginal.remove(index)
+                                } else {
+                                    showingOriginal.insert(index)
                                 }
                             }
-                        }
-                    }
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, minHeight: 200)
-                }
-                .onChange(of: transcriptSegments.count) { _, _ in
-                    lastDataUpdateTime = Date()
-                    if shouldAutoScroll {
-                        lastAutoScrollTime = Date()
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo("top", anchor: .top)
-                        }
+                        )
+                        .equatable() // Explicitly enable Equatable check
                     }
                 }
-                .onChange(of: partialText) { _, _ in
-                    lastDataUpdateTime = Date()
-                    if shouldAutoScroll {
-                        lastAutoScrollTime = Date()
-                        withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo("top", anchor: .top)
+            }
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 200)
+        }
+        .onChange(of: transcriptSegments.count) { _, newCount in
+            // MeCab formatting for Japanese segments (display-only)
+            // Skip when using Gemini - it returns spaced Japanese via its own API
+            if MeCabFormatterService.isJapanese(settings.selectedLanguage) && settings.translationProvider != .gemini {
+                let formatter = MeCabFormatterService.shared
+                // Format any new segments that aren't cached yet
+                for i in 0..<newCount {
+                    if mecabFormattedSegments[i] == nil {
+                        let text = transcriptSegments[i]
+                        Task {
+                            let formatted = await formatter.format(text)
+                            mecabFormattedSegments[i] = formatted
                         }
                     }
                 }
-                
-                // Resume Auto-Scroll Button (now scrolls to top)
-                if !shouldAutoScroll && (!transcriptSegments.isEmpty || !partialText.isEmpty) {
-                    Button(action: {
-                        shouldAutoScroll = true
-                        lastAutoScrollTime = Date()
-                        withAnimation {
-                            proxy.scrollTo("top", anchor: .top)
+            }
+        }
+        // Re-format MeCab cache when segment content changes (handles similarity replacement, LLM correction, etc.)
+        .onChange(of: transcriptSegments) { _, newSegments in
+            // Skip when using Gemini - it returns spaced Japanese via its own API
+            guard MeCabFormatterService.isJapanese(settings.selectedLanguage) && settings.translationProvider != .gemini else { return }
+            let formatter = MeCabFormatterService.shared
+            for (i, text) in newSegments.enumerated() {
+                // Check if cached entry is stale (segment text was mutated)
+                if let cached = mecabFormattedSegments[i] {
+                    // Extract plain text from cached AttributedString for comparison
+                    let cachedPlain = String(cached.characters)
+                        .replacingOccurrences(of: " ", with: "")  // Remove bunsetsu spaces
+                        .replacingOccurrences(of: "\u{3000}", with: "")  // Remove full-width spaces
+                    let originalPlain = text.replacingOccurrences(of: " ", with: "")
+                    if originalPlain != cachedPlain {
+                        mecabFormattedSegments[i] = nil
+                        Task {
+                            let formatted = await formatter.format(text)
+                            mecabFormattedSegments[i] = formatted
                         }
-                    }) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 32))
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(.blue)
-                            .shadow(radius: 2, y: 1)
-                            .padding(16)
                     }
-                    .buttonStyle(.plain)
-                    .transition(.opacity.combined(with: .scale))
                 }
             }
         }
@@ -738,6 +713,7 @@ struct LyricModeMainView: View {
         // Cancel any pending translation requests immediately
         Task {
             await translationService.cancelPendingRequests()
+            geminiTranslationService.cancelPendingRequests()
         }
         
         saveCurrentSession()
@@ -843,6 +819,7 @@ struct LyricModeMainView: View {
         // Cancel translations
         Task {
              await translationService.cancelPendingRequests()
+             geminiTranslationService.cancelPendingRequests()
         }
         translationService.clearHistory()
         liveTranslationCreatedSegments.removeAll()
@@ -1213,9 +1190,29 @@ struct LyricModeMainView: View {
                     let translation: String
                     
                     // Check which provider to use
-                    if self.settings.translationProvider == .chatGPT {
+                    switch self.settings.translationProvider {
+                    case .chatGPT:
                         translation = try await self.translateWithChatGPT(text, forSegmentIndex: index)
-                    } else {
+                    case .gemini:
+                        // Skip short text for Gemini (avoid wasting API calls on fragments)
+                        guard text.count > 10 else {
+                            translation = ""
+                            break
+                        }
+                        let geminiResult = try await self.geminiTranslationService.translate(text, model: self.settings.selectedGeminiModel)
+                        translation = geminiResult.vn
+                        // Update transcript with corrected/spaced Japanese + underline typo fixes
+                        await MainActor.run {
+                            if index < self.transcriptSegments.count && !geminiResult.jaFixedSpaced.isEmpty {
+                                self.transcriptSegments[index] = geminiResult.jaFixedSpaced
+                                // Build AttributedString with underline on corrected words
+                                self.mecabFormattedSegments[index] = self.buildUnderlinedAttributedString(
+                                    text: geminiResult.jaFixedSpaced,
+                                    typoFixes: geminiResult.typoFix
+                                )
+                            }
+                        }
+                    case .ollama:
                         translation = try await self.translationService.translate(text)
                     }
                     
@@ -1229,6 +1226,46 @@ struct LyricModeMainView: View {
                 }
             }
         }
+    }
+    
+    /// Build an AttributedString with underline on corrected (typo-fixed) words
+    private func buildUnderlinedAttributedString(
+        text: String,
+        typoFixes: [GeminiTranslationService.TypoFix]
+    ) -> AttributedString {
+        var attributed = AttributedString(text)
+        
+        // For each typo fix, find the corrected word in the text and underline it
+        for fix in typoFixes {
+            let fixedWord = fix.fixed
+            guard !fixedWord.isEmpty else { continue }
+            
+            // Search for all occurrences of the fixed word in the attributed string
+            var searchStart = attributed.startIndex
+            while searchStart < attributed.endIndex {
+                let remaining = attributed[searchStart...]
+                let plainRemaining = String(remaining.characters)
+                
+                guard let range = plainRemaining.range(of: fixedWord) else { break }
+                
+                // Convert String range to AttributedString range
+                let offset = plainRemaining.distance(from: plainRemaining.startIndex, to: range.lowerBound)
+                let length = fixedWord.count
+                
+                let attrStart = attributed.characters.index(searchStart, offsetBy: offset)
+                let attrEnd = attributed.characters.index(attrStart, offsetBy: length)
+                let attrRange = attrStart..<attrEnd
+                
+                // Apply underline and color
+                attributed[attrRange].underlineStyle = .single
+                attributed[attrRange].foregroundColor = .orange
+                
+                // Move past this match
+                searchStart = attrEnd
+            }
+        }
+        
+        return attributed
     }
     
     /// Translate text using ChatGPT browser service
@@ -1382,9 +1419,29 @@ struct LyricModeMainView: View {
                 let translation: String
                 
                 // Check which provider to use
-                if settings.translationProvider == .chatGPT {
+                switch settings.translationProvider {
+                case .chatGPT:
                     translation = try await translateWithChatGPT(text, forSegmentIndex: index)
-                } else {
+                case .gemini:
+                    // Skip short text for Gemini (avoid wasting API calls on fragments)
+                    guard text.count > 10 else {
+                        translation = ""
+                        break
+                    }
+                    let geminiResult = try await geminiTranslationService.translate(text, model: settings.selectedGeminiModel)
+                    translation = geminiResult.vn
+                    // Update transcript with corrected/spaced Japanese + underline typo fixes
+                    await MainActor.run {
+                        if index < transcriptSegments.count && !geminiResult.jaFixedSpaced.isEmpty {
+                            transcriptSegments[index] = geminiResult.jaFixedSpaced
+                            // Build AttributedString with underline on corrected words
+                            mecabFormattedSegments[index] = buildUnderlinedAttributedString(
+                                text: geminiResult.jaFixedSpaced,
+                                typoFixes: geminiResult.typoFix
+                            )
+                        }
+                    }
+                case .ollama:
                     translation = try await translationService.translate(text)
                 }
                 
@@ -1530,6 +1587,7 @@ struct LyricModeSettingsPopup: View {
     @State private var localTargetLanguage: String = "Vietnamese"
     @State private var localTranslateImmediately: Bool = false
     @State private var localTranslationProvider: TranslationProvider = .ollama
+    @State private var localSelectedGeminiModel: String = "gemini-2.0-flash"
     
     // Post-Processing state
     @State private var localPostProcessingEnabled: Bool = false
@@ -1606,6 +1664,7 @@ struct LyricModeSettingsPopup: View {
             localTargetLanguage = settings.targetLanguage
             localTranslateImmediately = settings.translateImmediately
             localTranslationProvider = settings.translationProvider
+            localSelectedGeminiModel = settings.selectedGeminiModel
             
             // Post-Processing
             localPostProcessingEnabled = settings.postProcessingEnabled
@@ -1649,6 +1708,7 @@ struct LyricModeSettingsPopup: View {
         localTargetLanguage != settings.targetLanguage ||
         localTranslateImmediately != settings.translateImmediately ||
         localTranslationProvider != settings.translationProvider ||
+        localSelectedGeminiModel != settings.selectedGeminiModel ||
         localPostProcessingEnabled != settings.postProcessingEnabled ||
         localPostProcessingModel != settings.postProcessingModel ||
         localPostProcessingTimeout != settings.postProcessingTimeout ||
@@ -1692,6 +1752,7 @@ struct LyricModeSettingsPopup: View {
         settings.targetLanguage = localTargetLanguage
         settings.translateImmediately = localTranslateImmediately
         settings.translationProvider = localTranslationProvider
+        settings.selectedGeminiModel = localSelectedGeminiModel
         
         // Post-Processing settings
         settings.postProcessingEnabled = localPostProcessingEnabled
@@ -2385,6 +2446,26 @@ extension LyricModeSettingsPopup {
                         }
                     }
                     
+                    // Gemini-specific: Model picker
+                    if localTranslationProvider == .gemini {
+                        HStack {
+                            Text("Gemini Model")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            
+                            Spacer()
+                            
+                            Picker("Gemini Model", selection: $localSelectedGeminiModel) {
+                                Text("Gemini 2.0 Flash").tag("gemini-2.0-flash")
+                                Text("Gemini 2.0 Flash-Lite").tag("gemini-2.0-flash-lite")
+                                Text("Gemini 2.5 Flash").tag("gemini-2.5-flash-preview-05-20")
+                                Text("Gemini 2.5 Pro").tag("gemini-2.5-pro-preview-05-06")
+                                Text("Gemini 3 Flash").tag("gemini-3-flash-preview")
+                            }
+                            .labelsHidden()
+                        }
+                    }
+                    
                     HStack {
                         Text("Target Language")
                             .font(.subheadline)
@@ -2407,9 +2488,13 @@ extension LyricModeSettingsPopup {
                         .labelsHidden()
                     }
                     
-                    Text(localTranslationProvider == .ollama 
-                        ? "Each paragraph will be translated using Ollama"
-                        : "Each paragraph will be translated using ChatGPT")
+                    Text({
+                        switch localTranslationProvider {
+                        case .ollama: return "Each paragraph will be translated using Ollama"
+                        case .chatGPT: return "Each paragraph will be translated using ChatGPT"
+                        case .gemini: return "Each paragraph will be translated using Gemini API"
+                        }
+                    }())
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -2504,11 +2589,12 @@ extension LyricModeSettingsPopup {
 struct SegmentRowView: View, Equatable {
     let index: Int
     let segment: String
+    let displaySegment: AttributedString?  // MeCab-formatted text for display (nil = use raw segment)
     let translation: String
     let fontSize: CGFloat
     let isLatest: Bool
     let isIgnored: Bool
-    let isNew: Bool
+    let creationDate: Date?  // When the segment was created (nil = unknown)
     let translationEnabled: Bool
     
     // Show Original feature
@@ -2524,6 +2610,12 @@ struct SegmentRowView: View, Equatable {
     
     @State private var isHovering = false
     
+    /// Whether this segment is considered "new" (created within the last 20 seconds)
+    private func isNew(at now: Date) -> Bool {
+        guard let created = creationDate else { return false }
+        return now.timeIntervalSince(created) < 20
+    }
+    
     static func == (lhs: SegmentRowView, rhs: SegmentRowView) -> Bool {
         return lhs.index == rhs.index &&
                lhs.segment == rhs.segment &&
@@ -2531,7 +2623,7 @@ struct SegmentRowView: View, Equatable {
                lhs.fontSize == rhs.fontSize &&
                lhs.isLatest == rhs.isLatest &&
                lhs.isIgnored == rhs.isIgnored &&
-               lhs.isNew == rhs.isNew &&
+               lhs.creationDate == rhs.creationDate &&
                lhs.translationEnabled == rhs.translationEnabled &&
                lhs.originalText == rhs.originalText &&
                lhs.isShowingOriginal == rhs.isShowingOriginal &&
@@ -2542,15 +2634,19 @@ struct SegmentRowView: View, Equatable {
         HStack(alignment: .top, spacing: 8) {
             // Main content
             VStack(alignment: .leading, spacing: 4) {
-                // Show original text when toggled, otherwise show corrected segment
-                let displayText = isShowingOriginal && !originalText.isEmpty ? originalText : segment
+                // Show original text when toggled, otherwise show MeCab-formatted display segment
+                let showOriginal = isShowingOriginal && !originalText.isEmpty
                 
-                TranscriptParagraphView(
-                    text: displayText,
-                    fontSize: fontSize,
-                    isLatest: isLatest,
-                    isNew: isNew
-                )
+                // Per-row TimelineView: only this row re-evaluates every 5s for the NEW badge
+                TimelineView(.periodic(from: .now, by: 5.0)) { timeline in
+                    TranscriptParagraphView(
+                        text: showOriginal ? originalText : segment,
+                        attributedText: showOriginal ? nil : displaySegment,
+                        fontSize: fontSize,
+                        isLatest: isLatest,
+                        isNew: isNew(at: timeline.date)
+                    )
+                }
                 .opacity(isIgnored ? 0.5 : 1.0)
                 
                 // Show "Showing original" indicator when in original mode
@@ -2644,6 +2740,7 @@ struct SegmentRowView: View, Equatable {
 /// A view that displays a single transcript paragraph with improved readability
 struct TranscriptParagraphView: View {
     let text: String
+    var attributedText: AttributedString? = nil  // MeCab bunsetsu-formatted text with filler fading
     let fontSize: CGFloat
     let isLatest: Bool
     let isNew: Bool
@@ -2655,13 +2752,19 @@ struct TranscriptParagraphView: View {
                 .fill(isNew ? Color.green : (isLatest ? Color.accentColor : Color.secondary.opacity(0.3)))
                 .frame(width: 3)
             
-            // Text content
-            Text(text)
-                .font(.system(size: fontSize, weight: .regular))
-                .foregroundColor(.primary)
-                .lineSpacing(4)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // Text content — use AttributedString if available (bunsetsu + filler styling)
+            Group {
+                if let attributed = attributedText {
+                    Text(attributed)
+                } else {
+                    Text(text)
+                        .foregroundColor(.primary)
+                }
+            }
+            .font(.system(size: fontSize, weight: .regular))
+            .lineSpacing(4)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
