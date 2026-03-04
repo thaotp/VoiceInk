@@ -45,6 +45,10 @@ struct LyricModeMainView: View {
     
     // MeCab-formatted display text cache (display-only, keyed by segment index)
     @State private var mecabFormattedSegments: [Int: AttributedString] = [:]
+    // Gemini typo corrections per segment (for corrections popup)
+    @State private var geminiTypoFixes: [Int: [GeminiTranslationService.TypoFix]] = [:]
+    // Original segment text before Gemini correction (for show-original toggle)
+    @State private var geminiOriginalTexts: [Int: String] = [:]
     
     // Cache joined segments to avoid O(N) join on every partial update
     @State private var cachedAllConfirmed: String = ""
@@ -370,6 +374,8 @@ struct LyricModeMainView: View {
                             index: index,
                             segment: segment,
                             displaySegment: mecabFormattedSegments[index],
+                            typoFixes: geminiTypoFixes[index] ?? [],
+                            geminiOriginalText: geminiOriginalTexts[index] ?? "",
                             translation: index < translatedSegments.count ? translatedSegments[index] : "",
                             fontSize: settings.fontSize,
                             isLatest: index == transcriptSegments.count - 1 && partialText.isEmpty,
@@ -428,11 +434,8 @@ struct LyricModeMainView: View {
                 }
             }
         }
-        // Re-format MeCab cache when segment content changes (handles similarity replacement, LLM correction, etc.)
+        // Invalidate stale MeCab/Gemini cache entries when segment content changes
         .onChange(of: transcriptSegments) { _, newSegments in
-            // Skip when using Gemini - it returns spaced Japanese via its own API
-            guard MeCabFormatterService.isJapanese(settings.selectedLanguage) && settings.translationProvider != .gemini else { return }
-            let formatter = MeCabFormatterService.shared
             for (i, text) in newSegments.enumerated() {
                 // Check if cached entry is stale (segment text was mutated)
                 if let cached = mecabFormattedSegments[i] {
@@ -442,10 +445,15 @@ struct LyricModeMainView: View {
                         .replacingOccurrences(of: "\u{3000}", with: "")  // Remove full-width spaces
                     let originalPlain = text.replacingOccurrences(of: " ", with: "")
                     if originalPlain != cachedPlain {
+                        // Stale → remove so UI falls back to live segment text
                         mecabFormattedSegments[i] = nil
-                        Task {
-                            let formatted = await formatter.format(text)
-                            mecabFormattedSegments[i] = formatted
+                        // Re-format with MeCab only for non-Gemini Japanese
+                        if MeCabFormatterService.isJapanese(settings.selectedLanguage) && settings.translationProvider != .gemini {
+                            let formatter = MeCabFormatterService.shared
+                            Task {
+                                let formatted = await formatter.format(text)
+                                mecabFormattedSegments[i] = formatted
+                            }
                         }
                     }
                 }
@@ -1203,13 +1211,19 @@ struct LyricModeMainView: View {
                         translation = geminiResult.vn
                         // Update transcript with corrected/spaced Japanese + underline typo fixes
                         await MainActor.run {
-                            if index < self.transcriptSegments.count && !geminiResult.jaFixedSpaced.isEmpty {
+                            // Only apply if the segment hasn't been replaced by newer speech
+                            let currentText = index < self.transcriptSegments.count ? self.transcriptSegments[index] : nil
+                            if index < self.transcriptSegments.count && !geminiResult.jaFixedSpaced.isEmpty
+                                && currentText == text {
+                                // Save original before overwriting
+                                self.geminiOriginalTexts[index] = self.transcriptSegments[index]
                                 self.transcriptSegments[index] = geminiResult.jaFixedSpaced
                                 // Build AttributedString with underline on corrected words
                                 self.mecabFormattedSegments[index] = self.buildUnderlinedAttributedString(
                                     text: geminiResult.jaFixedSpaced,
                                     typoFixes: geminiResult.typoFix
                                 )
+                                self.geminiTypoFixes[index] = geminiResult.typoFix
                             }
                         }
                     case .ollama:
@@ -1217,7 +1231,9 @@ struct LyricModeMainView: View {
                     }
                     
                     await MainActor.run {
-                        if index < self.translatedSegments.count {
+                        // Only apply if no newer translation request has superseded this one
+                        if index < self.translatedSegments.count,
+                           self.pendingTranslations[index] == nil || self.pendingTranslations[index] == text {
                             self.translatedSegments[index] = translation
                         }
                     }
@@ -1433,12 +1449,15 @@ struct LyricModeMainView: View {
                     // Update transcript with corrected/spaced Japanese + underline typo fixes
                     await MainActor.run {
                         if index < transcriptSegments.count && !geminiResult.jaFixedSpaced.isEmpty {
+                            // Save original before overwriting
+                            geminiOriginalTexts[index] = transcriptSegments[index]
                             transcriptSegments[index] = geminiResult.jaFixedSpaced
                             // Build AttributedString with underline on corrected words
                             mecabFormattedSegments[index] = buildUnderlinedAttributedString(
                                 text: geminiResult.jaFixedSpaced,
                                 typoFixes: geminiResult.typoFix
                             )
+                            geminiTypoFixes[index] = geminiResult.typoFix
                         }
                     }
                 case .ollama:
@@ -2590,6 +2609,8 @@ struct SegmentRowView: View, Equatable {
     let index: Int
     let segment: String
     let displaySegment: AttributedString?  // MeCab-formatted text for display (nil = use raw segment)
+    let typoFixes: [GeminiTranslationService.TypoFix]  // Gemini corrections for popup
+    let geminiOriginalText: String  // Original text before Gemini correction
     let translation: String
     let fontSize: CGFloat
     let isLatest: Bool
@@ -2609,6 +2630,8 @@ struct SegmentRowView: View, Equatable {
     let onToggleOriginal: () -> Void
     
     @State private var isHovering = false
+    @State private var showingCorrections = false
+    @State private var showingGeminiOriginal = false
     
     /// Whether this segment is considered "new" (created within the last 20 seconds)
     private func isNew(at now: Date) -> Bool {
@@ -2627,7 +2650,9 @@ struct SegmentRowView: View, Equatable {
                lhs.translationEnabled == rhs.translationEnabled &&
                lhs.originalText == rhs.originalText &&
                lhs.isShowingOriginal == rhs.isShowingOriginal &&
-               lhs.postProcessingEnabled == rhs.postProcessingEnabled
+               lhs.postProcessingEnabled == rhs.postProcessingEnabled &&
+               lhs.typoFixes.count == rhs.typoFixes.count &&
+               lhs.geminiOriginalText == rhs.geminiOriginalText
     }
     
     var body: some View {
@@ -2648,6 +2673,21 @@ struct SegmentRowView: View, Equatable {
                     )
                 }
                 .opacity(isIgnored ? 0.5 : 1.0)
+                
+                // Show original (pre-Gemini-correction) text below the edited segment
+                if showingGeminiOriginal && !geminiOriginalText.isEmpty {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "text.quote")
+                            .font(.system(size: 10))
+                            .foregroundColor(.purple.opacity(0.6))
+                        Text(geminiOriginalText)
+                            .font(.system(size: fontSize * 0.8))
+                            .foregroundColor(.purple.opacity(0.6))
+                            .italic()
+                    }
+                    .padding(.horizontal, 31)
+                    .padding(.top, 2)
+                }
                 
                 // Show "Showing original" indicator when in original mode
                 if isShowingOriginal && !originalText.isEmpty {
@@ -2671,7 +2711,38 @@ struct SegmentRowView: View, Equatable {
             
             // Action buttons container (always present for consistent hover area)
             VStack(spacing: 4) {
-                // Copy button
+                // 1. Show Corrections popup (only when Gemini typo fixes exist)
+                if !typoFixes.isEmpty {
+                    Button(action: { showingCorrections.toggle() }) {
+                        Image(systemName: "pencil.and.list.clipboard")
+                            .font(.system(size: 12))
+                            .foregroundColor(showingCorrections ? .orange : .secondary)
+                            .frame(width: 24, height: 24)
+                            .background(Color.gray.opacity(0.2))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show corrections")
+                    .popover(isPresented: $showingCorrections, arrowEdge: .leading) {
+                        CorrectionsPopoverView(typoFixes: typoFixes)
+                    }
+                }
+                
+                // 2. Show original (pre-Gemini) text toggle
+                if !geminiOriginalText.isEmpty {
+                    Button(action: { showingGeminiOriginal.toggle() }) {
+                        Image(systemName: showingGeminiOriginal ? "text.quote" : "text.magnifyingglass")
+                            .font(.system(size: 12))
+                            .foregroundColor(showingGeminiOriginal ? .purple : .secondary)
+                            .frame(width: 24, height: 24)
+                            .background(Color.gray.opacity(0.2))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(showingGeminiOriginal ? "Hide original" : "Show original")
+                }
+                
+                // 3. Copy button
                 Button(action: onCopy) {
                     Image(systemName: "doc.on.doc")
                         .font(.system(size: 12))
@@ -2683,7 +2754,7 @@ struct SegmentRowView: View, Equatable {
                 .buttonStyle(.plain)
                 .help("Copy to clipboard")
                 
-                // Retranslate button (only if translation enabled)
+                // 4. Retranslate button (only if translation enabled)
                 if translationEnabled {
                     Button(action: onRetranslate) {
                         Image(systemName: "arrow.triangle.2.circlepath")
@@ -2697,7 +2768,7 @@ struct SegmentRowView: View, Equatable {
                     .help("Retranslate")
                 }
                 
-                // Show Original/Corrected toggle button (only if post-processing enabled and has original)
+                // 5. Show Original/Corrected toggle (post-processing)
                 if postProcessingEnabled && !originalText.isEmpty {
                     Button(action: onToggleOriginal) {
                         Image(systemName: isShowingOriginal ? "text.badge.checkmark" : "text.badge.minus")
@@ -2711,7 +2782,7 @@ struct SegmentRowView: View, Equatable {
                     .help(isShowingOriginal ? "Show corrected" : "Show original")
                 }
                 
-                // Ignore/Unignore button
+                // 6. Ignore/Unignore button
                 Button(action: onToggleIgnore) {
                     Image(systemName: isIgnored ? "eye" : "eye.slash")
                         .font(.system(size: 12))
@@ -2773,6 +2844,55 @@ struct TranscriptParagraphView: View {
                 .fill(isNew ? Color.green.opacity(0.08) : (isLatest ? Color.accentColor.opacity(0.05) : Color.clear))
                 .animation(.easeOut(duration: 1.0), value: isNew)
         )
+    }
+}
+
+// MARK: - Corrections Popover View
+
+/// Popover showing original → corrected word comparisons from Gemini typo fixes
+struct CorrectionsPopoverView: View {
+    let typoFixes: [GeminiTranslationService.TypoFix]
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            
+            // Corrections list
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(typoFixes.enumerated()), id: \.offset) { idx, fix in
+                        HStack(alignment: .center, spacing: 12) {
+                            // Original word (strikethrough + red)
+                            Text(fix.original)
+                                .strikethrough(true, color: .red.opacity(0.6))
+                                .foregroundColor(.red.opacity(0.7))
+                                .font(.system(size: 14))
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            
+                            // Arrow
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.secondary)
+                            
+                            // Corrected word (green)
+                            Text(fix.fixed)
+                                .foregroundColor(.green)
+                                .font(.system(size: 14, weight: .medium))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        
+                        if idx < typoFixes.count - 1 {
+                            Divider()
+                                .padding(.horizontal, 12)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .frame(maxHeight: 200)
+        }
+        .frame(width: 280)
     }
 }
 
