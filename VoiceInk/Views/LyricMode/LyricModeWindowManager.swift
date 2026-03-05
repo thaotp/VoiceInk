@@ -10,6 +10,7 @@ final class LyricModeWindowManager: ObservableObject {
     
     @Published private(set) var isVisible = false
     @Published private(set) var isRecording = false
+    @Published private(set) var isPaused = false
     @Published private(set) var isOverlayVisible = false
     
     // Content state (persists across tab switches)
@@ -159,6 +160,7 @@ final class LyricModeWindowManager: ObservableObject {
         
         // Remove all Combine subscriptions
         cancellables.removeAll()
+        isPaused = false
         isRecording = false
         
         // Destroy old window to force fresh view instances on next start
@@ -169,6 +171,7 @@ final class LyricModeWindowManager: ObservableObject {
     
     /// Pause recording (keeps engine alive but stops processing)
     func pauseRecording() {
+        isPaused = true
         appleSpeechService?.pause()
         diarizedOrchestrator?.pause()
         stopTimer()
@@ -176,6 +179,7 @@ final class LyricModeWindowManager: ObservableObject {
     
     /// Resume recording after pause
     func resumeRecording() {
+        isPaused = false
         appleSpeechService?.resume()
         diarizedOrchestrator?.resume()
         startTimer()
@@ -234,6 +238,10 @@ final class LyricModeWindowManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] text in
                 guard let self = self else { return }
+                guard !self.isPaused else {
+                    print("[WindowManager] -> SKIPPED: paused")
+                    return
+                }
                 
                 print("[WindowManager] Received from AppleSpeech: '\(text.prefix(50))...'")
                 
@@ -251,7 +259,8 @@ final class LyricModeWindowManager: ObservableObject {
         service.$partialTranscript
             .receive(on: DispatchQueue.main)
             .sink { [weak self] text in
-                self?.partialTranscriptionPublisher.send(text)
+                guard let self = self, !self.isPaused else { return }
+                self.partialTranscriptionPublisher.send(text)
             }
             .store(in: &cancellables)
         
@@ -273,6 +282,10 @@ final class LyricModeWindowManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] segments in
                 guard let self = self else { return }
+                guard !self.isPaused else {
+                    print("[WindowManager] -> SKIPPED diarized segments: paused")
+                    return
+                }
                 
                 print("[WindowManager] Received \(segments.count) diarized segments")
                 
@@ -394,9 +407,9 @@ final class LyricModeWindowManager: ObservableObject {
     
     private func startTimer() {
         stopTimer() // Invalidate existing if any
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.recordingDuration += 0.1
+                self?.recordingDuration += 1.0
             }
         }
     }
@@ -432,6 +445,12 @@ final class LyricModeWindowManager: ObservableObject {
         // If recording with Apple Speech, pause and resume to handle device change
         guard isRecording, let speechService = appleSpeechService else { return }
         
+        // Don't auto-resume if the user has explicitly paused
+        guard !isPaused else {
+            print("LyricMode: Device list changed but recording is paused, skipping auto-resume")
+            return
+        }
+        
         // Cancel any pending resume to debounce rapid notifications
         deviceChangeWorkItem?.cancel()
         
@@ -440,7 +459,7 @@ final class LyricModeWindowManager: ObservableObject {
         
         // Small delay then resume (debounced)
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self = self, self.isRecording else { return }
+            guard let self = self, self.isRecording, !self.isPaused else { return }
             self.appleSpeechService?.resume()
         }
         deviceChangeWorkItem = workItem

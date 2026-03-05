@@ -17,7 +17,7 @@ struct LyricModeMainView: View {
     @State private var toastColor: Color = .green
     @State private var translatedText: String = ""
     // REMOVED: @State private var cancellables - using .onReceive() instead for proper SwiftUI subscription lifecycle
-    @State private var isPaused = false
+    // isPaused is now managed by lyricModeManager (single source of truth)
 
     // Teams Live Captions window selection
     @State private var showingWindowSelection = false
@@ -171,7 +171,10 @@ struct LyricModeMainView: View {
         .onReceive(lyricModeManager.transcriptionPublisher) { text in
             handleTranscriptionReceived(text)
         }
-        .onReceive(lyricModeManager.partialTranscriptionPublisher) { text in
+        .onReceive(
+            lyricModeManager.partialTranscriptionPublisher
+                .throttle(for: .milliseconds(200), scheduler: DispatchQueue.main, latest: true)
+        ) { text in
             handlePartialTranscription(text)
         }
         .onReceive(lyricModeManager.$transcriptSegments.removeDuplicates()) { segments in
@@ -294,10 +297,10 @@ struct LyricModeMainView: View {
                 .overlay(
                     Circle()
                         .stroke(audioStatusColor.opacity(0.3), lineWidth: 2)
-                        .scaleEffect(lyricModeManager.isRecording && !isPaused ? 1.5 : 1.0)
-                        .opacity(lyricModeManager.isRecording && !isPaused ? 0.0 : 1.0)
+                        .scaleEffect(lyricModeManager.isRecording && !lyricModeManager.isPaused ? 1.5 : 1.0)
+                        .opacity(lyricModeManager.isRecording && !lyricModeManager.isPaused ? 0.0 : 1.0)
                         .animation(
-                            lyricModeManager.isRecording && !isPaused ?
+                            lyricModeManager.isRecording && !lyricModeManager.isPaused ?
                             Animation.easeOut(duration: 1.0).repeatForever(autoreverses: false) :
                             .default,
                             value: lyricModeManager.isRecording
@@ -320,7 +323,7 @@ struct LyricModeMainView: View {
         if !isAudioDeviceAvailable {
             return .red
         } else if lyricModeManager.isRecording {
-            return isPaused ? .orange : .green
+            return lyricModeManager.isPaused ? .orange : .green
         } else {
             return .gray
         }
@@ -330,7 +333,7 @@ struct LyricModeMainView: View {
         if !isAudioDeviceAvailable {
             return "No Device"
         } else if lyricModeManager.isRecording {
-            return isPaused ? "Paused" : "Recording"
+            return lyricModeManager.isPaused ? "Paused" : "Recording"
         } else {
             return "Ready"
         }
@@ -369,7 +372,8 @@ struct LyricModeMainView: View {
                     }
                     
                     // Display each transcript segment in REVERSED order (newest first)
-                    ForEach(Array(transcriptSegments.enumerated().reversed()), id: \.offset) { index, segment in
+                    ForEach((0..<transcriptSegments.count).reversed(), id: \.self) { index in
+                        let segment = transcriptSegments[index]
                         SegmentRowView(
                             index: index,
                             segment: segment,
@@ -417,13 +421,13 @@ struct LyricModeMainView: View {
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, minHeight: 200)
         }
-        .onChange(of: transcriptSegments.count) { _, newCount in
+        .onChange(of: transcriptSegments.count) { oldCount, newCount in
             // MeCab formatting for Japanese segments (display-only)
             // Skip when using Gemini - it returns spaced Japanese via its own API
             if MeCabFormatterService.isJapanese(settings.selectedLanguage) && settings.translationProvider != .gemini {
                 let formatter = MeCabFormatterService.shared
-                // Format any new segments that aren't cached yet
-                for i in 0..<newCount {
+                // Only format newly appended segments (not the entire array)
+                for i in oldCount..<newCount {
                     if mecabFormattedSegments[i] == nil {
                         let text = transcriptSegments[i]
                         Task {
@@ -435,8 +439,10 @@ struct LyricModeMainView: View {
             }
         }
         // Invalidate stale MeCab/Gemini cache entries when segment content changes
-        .onChange(of: transcriptSegments) { _, newSegments in
+        .onChange(of: transcriptSegments) { oldSegments, newSegments in
             for (i, text) in newSegments.enumerated() {
+                // Skip segments that haven't changed (common case: only new segments appended)
+                if i < oldSegments.count && oldSegments[i] == text { continue }
                 // Check if cached entry is stale (segment text was mutated)
                 if let cached = mecabFormattedSegments[i] {
                     // Extract plain text from cached AttributedString for comparison
@@ -580,13 +586,13 @@ struct LyricModeMainView: View {
         }
         .padding(.vertical, 12)
         .animation(.easeInOut(duration: 0.2), value: lyricModeManager.isRecording)
-        .animation(.easeInOut(duration: 0.2), value: isPaused)
+        .animation(.easeInOut(duration: 0.2), value: lyricModeManager.isPaused)
     }
     
     // MARK: - Record Button Helpers
     
     private var recordButtonColor: Color {
-        if isPaused {
+        if lyricModeManager.isPaused {
             return Color.orange
         } else if lyricModeManager.isRecording {
             return Color.red
@@ -597,7 +603,7 @@ struct LyricModeMainView: View {
     
     @ViewBuilder
     private var recordButtonOverlay: some View {
-        if isPaused {
+        if lyricModeManager.isPaused {
             // Resume icon (play triangle)
             Image(systemName: "play.fill")
                 .font(.body)
@@ -617,7 +623,7 @@ struct LyricModeMainView: View {
     }
     
     private var recordButtonHelp: String {
-        if isPaused {
+        if lyricModeManager.isPaused {
             return "Resume Recording"
         } else if lyricModeManager.isRecording {
             return "Pause Recording"
@@ -650,22 +656,19 @@ struct LyricModeMainView: View {
     private var formattedDuration: String {
         let minutes = Int(recordingDuration) / 60
         let seconds = Int(recordingDuration) % 60
-        let hundredths = Int((recordingDuration.truncatingRemainder(dividingBy: 1)) * 100)
-        return String(format: "%02d:%02d.%02d", minutes, seconds, hundredths)
+        return String(format: "%02d:%02d", minutes, seconds)
     }
     
     // MARK: - Actions
     
     private func toggleRecordingOrPause() {
         Task {
-            if isPaused {
+            if lyricModeManager.isPaused {
                 // Resume recording
-                isPaused = false
                 lyricModeManager.resumeRecording()
             } else if lyricModeManager.isRecording {
                 // Pause recording - finalize any partial text
                 finalizePartialText()
-                isPaused = true
                 lyricModeManager.pauseRecording()
             } else {
                 // Start new recording
@@ -678,7 +681,6 @@ struct LyricModeMainView: View {
     /// Start recording (called after window selection for Teams, or directly for other engines)
     private func startRecordingAfterWindowSelection() async {
         do {
-            isPaused = false
             
             // Clear session-related state for fresh start
             liveTranslationCreatedSegments.removeAll()
@@ -687,6 +689,10 @@ struct LyricModeMainView: View {
             ignoredSegments.removeAll()
             segmentCreationTimes.removeAll()
             lastKnownSegmentCount = 0
+            mecabFormattedSegments.removeAll()
+            geminiTypoFixes.removeAll()
+            geminiOriginalTexts.removeAll()
+            cachedAllConfirmed = ""
             
             // Clear translation history for new session context
             translationService.clearHistory()
@@ -727,7 +733,7 @@ struct LyricModeMainView: View {
         saveCurrentSession()
         
         // Permanently stop
-        isPaused = false
+        // isPaused is reset by lyricModeManager.stopRecording()
         lyricModeManager.stopRecording()
     }
     
@@ -817,7 +823,7 @@ struct LyricModeMainView: View {
     }
     
     private func resetState() {
-        if lyricModeManager.isRecording || isPaused {
+        if lyricModeManager.isRecording || lyricModeManager.isPaused {
             lyricModeManager.stopRecording()
         }
         transcriptSegments = []
@@ -832,9 +838,14 @@ struct LyricModeMainView: View {
         translationService.clearHistory()
         liveTranslationCreatedSegments.removeAll()
         pendingTranslations.removeAll()
+        mecabFormattedSegments.removeAll()
+        geminiTypoFixes.removeAll()
+        geminiOriginalTexts.removeAll()
+        showingOriginal.removeAll()
+        cachedAllConfirmed = ""
         partialText = ""
         recordingDuration = 0
-        isPaused = false
+        // isPaused is reset by lyricModeManager.stopRecording()/clear()
         lyricModeManager.clear()
         
         // Hide overlay when resetting
@@ -853,6 +864,8 @@ struct LyricModeMainView: View {
     
     /// Handle transcription received from the manager
     private func handleTranscriptionReceived(_ text: String) {
+        // Defense-in-depth: manager already gates, but guard here too
+        guard !lyricModeManager.isPaused else { return }
         print("[MainView] handleTranscriptionReceived: '\(text.prefix(50))...' (segments: \(transcriptSegments.count))")
         
         // Skip if this segment was already created by Live Translation mode
@@ -879,6 +892,8 @@ struct LyricModeMainView: View {
     
     /// Handle partial transcription for live translation
     private func handlePartialTranscription(_ text: String) {
+        // Defense-in-depth: manager already gates, but guard here too
+        guard !lyricModeManager.isPaused else { return }
         if settings.translateImmediately {
             processLiveTranslation(from: text)
         }
@@ -897,7 +912,16 @@ struct LyricModeMainView: View {
         // Note: transcriptSegments is a computed property that already points to lyricModeManager.transcriptSegments
         // We only need to sync the translated segments count when the source changes
         syncTranslatedSegmentsCount()
-        cachedAllConfirmed = segments.joined(separator: " ")
+        // Incrementally update: only rebuild if segments were removed/replaced, otherwise append
+        if segments.count > lastKnownSegmentCount && lastKnownSegmentCount > 0 {
+            // Append only new segments
+            for i in lastKnownSegmentCount..<segments.count {
+                cachedAllConfirmed += " " + segments[i]
+            }
+        } else {
+            // Fallback: full rebuild (segment removed, replaced, or first call)
+            cachedAllConfirmed = segments.joined(separator: " ")
+        }
         
         // Track creation times for externally-added segments (e.g. Teams captions)
         if segments.count > lastKnownSegmentCount {
@@ -1169,7 +1193,7 @@ struct LyricModeMainView: View {
     /// Translate a segment at the given index
     private func translateSegment(at index: Int, text: String) {
         guard settings.translationEnabled else { return }
-        guard lyricModeManager.isRecording && !isPaused else { return }
+        guard lyricModeManager.isRecording && !lyricModeManager.isPaused else { return }
         
         // Skip if this exact text is already being translated for this index
         if pendingTranslations[index] == text {
@@ -1418,7 +1442,7 @@ struct LyricModeMainView: View {
     /// Retranslate a segment (forces re-translation by clearing first)
     private func retranslateSegment(at index: Int, text: String) {
         guard settings.translationEnabled else { return }
-        guard lyricModeManager.isRecording && !isPaused else { return }
+        guard lyricModeManager.isRecording && !lyricModeManager.isPaused else { return }
         
         syncTranslatedSegmentsCount()
         
@@ -2480,6 +2504,7 @@ extension LyricModeSettingsPopup {
                                 Text("Gemini 2.5 Flash").tag("gemini-2.5-flash-preview-05-20")
                                 Text("Gemini 2.5 Pro").tag("gemini-2.5-pro-preview-05-06")
                                 Text("Gemini 3 Flash").tag("gemini-3-flash-preview")
+                                Text("Gemini 3.1 Flash Lite").tag("gemini-3.1-flash-lite-preview")
                             }
                             .labelsHidden()
                         }
